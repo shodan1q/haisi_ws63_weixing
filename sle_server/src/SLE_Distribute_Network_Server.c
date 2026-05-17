@@ -370,44 +370,73 @@ static errcode_t example_sle_conn_register_cbks(void)
     return sle_connection_register_callbacks(&conn_cbks);
 }
 
+/* Observable state for LCD diagnostics. Reads:
+ *   0  initial wait    1 enabling    2 reg conn cbks    3 reg ssaps cbks
+ *   4 add server       5 setup adv   7 advertising (OK)
+ *   10 enable FAIL     11 cbks FAIL  12 ssaps FAIL      13 srv FAIL   14 adv FAIL
+ */
+volatile int g_sle_state = 0;
+
 static int example_sle_distribute_network_server_task(const char *arg)
 {
     unused(arg);
+    errcode_t ret = ERRCODE_FAIL;
 
-    (void)osal_msleep(5000); /* 延时5s，等待SLE初始化完毕 */
+    g_sle_state = 0;
+    (void)osal_msleep(2000); /* 减到 2s，靠下面的重试兜底 */
 
+    /* 使能SLE，最多重试 5 次，每次间隔 1.5s */
+    g_sle_state = 1;
     PRINT("[SLE Server] try enable.\r\n");
-    /* 使能SLE */
-    if (enable_sle() != ERRCODE_SUCC) {
-        PRINT("[SLE Server] sle enbale fail !\r\n");
+    for (int i = 0; i < 5; i++) {
+        ret = enable_sle();
+        if (ret == ERRCODE_SUCC) {
+            PRINT("[SLE Server] enable_sle ok at attempt %d\r\n", i + 1);
+            break;
+        }
+        PRINT("[SLE Server] enable_sle attempt %d failed (0x%x), retry...\r\n", i + 1, ret);
+        (void)osal_msleep(1500);
+    }
+    if (ret != ERRCODE_SUCC) {
+        g_sle_state = 10;
+        PRINT("[SLE Server] sle enable failed after retries\r\n");
         return -1;
     }
 
     /* 注册连接管理回调函数 */
+    g_sle_state = 2;
     if (example_sle_conn_register_cbks() != ERRCODE_SUCC) {
         PRINT("[SLE Server] sle conn register cbks fail !\r\n");
+        g_sle_state = 11;
         return -1;
     }
 
     /* 注册 SSAP server 回调函数 */
+    g_sle_state = 3;
     if (example_sle_ssaps_register_cbks() != ERRCODE_SUCC) {
         PRINT("[SLE Server] sle ssaps register cbks fail !\r\n");
+        g_sle_state = 12;
         return -1;
     }
 
     /* 注册Server, 添加Service和property, 启动Service */
+    g_sle_state = 4;
     if (example_sle_server_add() != ERRCODE_SUCC) {
         PRINT("[SLE Server] sle server add fail !\r\n");
+        g_sle_state = 13;
         return -1;
     }
 
     /* 设置设备公开，并公开设备 */
+    g_sle_state = 5;
     if (example_sle_server_adv_init() != ERRCODE_SUCC) {
         PRINT("[SLE Server] sle server adv fail !\r\n");
+        g_sle_state = 14;
         return -1;
     }
 
-    PRINT("[SLE Server] init ok\r\n");
+    g_sle_state = 7;
+    PRINT("[SLE Server] init ok, advertising as SLE_DISTRIBUTE_SERVER\r\n");
 
     return 0;
 }

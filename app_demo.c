@@ -1,17 +1,11 @@
 /*
  * 4T_HRM_QS2 (Hi3863 / WS63) NearLink (SLE) provisioning demo
  *
- *   - Brings up SLE server (advertises as "SLE_DISTRIBUTE_SERVER", waits for
- *     a HarmonyOS client to pair / write the magic flag).
- *   - In parallel, connects to a hardcoded Wi-Fi AP so the board itself is
- *     online. Edit WIFI_SSID / WIFI_KEY below to match your AP.
- *   - LCD shows status. LEDs / buzzer / buttons are dropped to keep the
- *     provisioning demo focused; re-enable from git history if needed.
- *
- * To make this a real "phone sends Wi-Fi creds via SLE" flow, modify
- * `example_network_info_write_request_cbk()` in sle_server/src/...Server.c
- * so it parses the incoming bytes as an example_wifi_ssid_key_ntf_ind_t and
- * calls example_sta_function() with the received SSID / key.
+ *   - Brings up SLE server, advertises as "SLE_DISTRIBUTE_SERVER".
+ *   - LCD shows SLE init step + WiFi state without needing serial.
+ *   - WiFi STA waits for SLE to be advertising before starting, and is
+ *     skipped entirely if WIFI_SSID is still the placeholder string —
+ *     this isolates SLE from WiFi radio activity while you debug.
  */
 
 #include <stdio.h>
@@ -24,7 +18,9 @@
 #include "lcd.h"
 #include "sle_server/inc/SLE_Distribute_Network_Server.h"
 
-/* ---- Wi-Fi credentials (edit before flashing) ---- */
+/* ---- Wi-Fi credentials ----
+ * Leave as-is to SKIP WiFi entirely (recommended while debugging SLE).
+ * Replace with real SSID/key to also bring up WiFi after SLE comes up. */
 #define WIFI_SSID  "your_ssid_here"
 #define WIFI_KEY   "your_password_here"
 
@@ -35,12 +31,45 @@
 #define WIFI_TASK_PRIO       20
 #define LCD_REFRESH_MS       500
 
-/* Imported from wifi_sta.c (copied verbatim from HiHope client side). */
+/* From wifi_sta.c */
 extern errcode_t example_sta_function(const char *ssid, uint8_t ssid_len,
                                       const char *key,  uint8_t key_len);
 
+/* From sle_server: 0/1/2/3/4/5 = init steps, 7 = OK, 10..14 = fail steps */
+extern volatile int g_sle_state;
+
 /* shared status reported to LCD */
-static volatile int g_wifi_state = 0;  /* 0=connecting, 1=ok, 2=fail */
+static volatile int g_wifi_state = -1;  /* -1=skipped, 0=connecting, 1=ok, 2=fail */
+
+static const char *sle_state_str(int s)
+{
+    switch (s) {
+        case 0:  return "SLE: waiting...    ";
+        case 1:  return "SLE: enabling...   ";
+        case 2:  return "SLE: reg conn cbks ";
+        case 3:  return "SLE: reg ssaps cbks";
+        case 4:  return "SLE: add server    ";
+        case 5:  return "SLE: setup adv     ";
+        case 7:  return "SLE: ADVERTISING   ";
+        case 10: return "SLE FAIL: enable   ";
+        case 11: return "SLE FAIL: cbks     ";
+        case 12: return "SLE FAIL: ssaps    ";
+        case 13: return "SLE FAIL: srv add  ";
+        case 14: return "SLE FAIL: adv      ";
+        default: return "SLE: unknown       ";
+    }
+}
+
+static const char *wifi_state_str(int s)
+{
+    switch (s) {
+        case -1: return "WiFi: SKIPPED      ";
+        case 0:  return "WiFi: connecting...";
+        case 1:  return "WiFi: CONNECTED    ";
+        case 2:  return "WiFi: FAILED       ";
+        default: return "WiFi: unknown      ";
+    }
+}
 
 /* =========================================================
  *  WiFi STA task
@@ -48,6 +77,20 @@ static volatile int g_wifi_state = 0;  /* 0=connecting, 1=ok, 2=fail */
 static void *wifi_task(const char *arg)
 {
     unused(arg);
+
+    if (strcmp(WIFI_SSID, "your_ssid_here") == 0) {
+        osal_printk("[wifi] placeholder SSID, skipping WiFi\r\n");
+        g_wifi_state = -1;
+        return NULL;
+    }
+
+    /* Wait for SLE to finish initializing so the WiFi scan doesn't
+     * starve the radio while SLE is bringing itself up. */
+    osal_printk("[wifi] waiting for SLE ready before starting...\r\n");
+    while (g_sle_state != 7 && g_sle_state < 10) {
+        osal_msleep(500);
+    }
+    osal_msleep(1000);
 
     osal_printk("[wifi] starting STA to SSID=%s\r\n", WIFI_SSID);
     g_wifi_state = 0;
@@ -57,9 +100,6 @@ static void *wifi_task(const char *arg)
     if (ret == ERRCODE_SUCC) {
         g_wifi_state = 1;
         osal_printk("[wifi] connected\r\n");
-        /* example_sta_function already printed the IP; we leave g_wifi_ip
-         * blank — LCD just reports CONNECTED. (Capturing the IP would
-         * require modifying example_sta_function to return it.) */
     } else {
         g_wifi_state = 2;
         osal_printk("[wifi] failed, ret=0x%x\r\n", ret);
@@ -73,33 +113,31 @@ static void *wifi_task(const char *arg)
 static void *lcd_task(const char *arg)
 {
     unused(arg);
-    char header[]   = "WS63 NearLink Cfg";
-    char sle_hint[] = "SLE: SLE_DISTRIBUTE_SERVER";
-    char sle_info[] = "  scan with HarmonyOS";
+    char header[]  = "WS63 NearLink Cfg";
+    char hint[]    = "Name: SLE_DISTRIBUTE_SERVER";
     char counter[32];
 
     spi_lcd_init();
     spi_lcd_clear(BLACK);
     spi_lcd_display_string_line(0, 0, GREEN, BLACK, (uint8_t *)header);
-    spi_lcd_display_string_line(0, 2, WHITE, BLACK, (uint8_t *)sle_hint);
-    spi_lcd_display_string_line(0, 3, WHITE, BLACK, (uint8_t *)sle_info);
+    spi_lcd_display_string_line(0, 1, WHITE, BLACK, (uint8_t *)hint);
 
-    int last_wifi_state = -1;
+    int last_sle = -999, last_wifi = -999;
     uint32_t tick = 0;
-
     for (;;) {
-        if (g_wifi_state != last_wifi_state) {
-            last_wifi_state = g_wifi_state;
-            char blank[] = "                       ";
-            spi_lcd_display_string_line(0, 5, WHITE, BLACK, (uint8_t *)blank);
-            const char *msg;
-            uint16_t color;
-            switch (g_wifi_state) {
-                case 1:  msg = "WiFi: CONNECTED";    color = GREEN; break;
-                case 2:  msg = "WiFi: FAILED";       color = RED;   break;
-                default: msg = "WiFi: connecting..."; color = WHITE; break;
-            }
-            spi_lcd_display_string_line(0, 5, color, BLACK, (uint8_t *)msg);
+        if (g_sle_state != last_sle) {
+            last_sle = g_sle_state;
+            uint16_t color = (last_sle == 7) ? GREEN
+                           : (last_sle >= 10) ? RED : WHITE;
+            spi_lcd_display_string_line(0, 3, color, BLACK,
+                                        (uint8_t *)sle_state_str(last_sle));
+        }
+        if (g_wifi_state != last_wifi) {
+            last_wifi = g_wifi_state;
+            uint16_t color = (last_wifi == 1) ? GREEN
+                           : (last_wifi == 2) ? RED : WHITE;
+            spi_lcd_display_string_line(0, 5, color, BLACK,
+                                        (uint8_t *)wifi_state_str(last_wifi));
         }
         tick++;
         snprintf(counter, sizeof(counter), "Uptime: %lu s",
@@ -127,7 +165,7 @@ static void app_entry(void)
 
     osal_kthread_unlock();
 
-    /* SLE server creates its own task internally with a 5s startup delay. */
+    /* SLE server creates its own task internally. */
     sle_provisioning_server_start();
 }
 

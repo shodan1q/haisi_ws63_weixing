@@ -84,6 +84,11 @@ typedef struct {
 static char g_ssid[] = "NL_DK63_SLE_Distribute_Network"; /* 第三方WiFi热点的SSID */
 static char g_key[] = "my_password";                     /* 第三方WiFi热点的接入密码 */
 
+/* Weak hook implemented in app_demo.c. When phone writes a full
+ * example_wifi_ssid_key_ntf_ind_t payload, we forward it to the WiFi task. */
+extern void sle_provisioning_creds_received(const char *ssid, uint8_t ssid_len,
+                                            const char *key,  uint8_t key_len);
+
 static void example_network_info_write_request_cbk(ssaps_req_write_cb_t *write_cb_para)
 {
     errcode_t ret = ERRCODE_FAIL;
@@ -91,7 +96,23 @@ static void example_network_info_write_request_cbk(ssaps_req_write_cb_t *write_c
     uint8_t data_len = 0;
     example_wifi_ssid_key_ntf_ind_t *wifi_ssid_key = NULL;
 
-    flag_len = strlen(WIFI_SSID_KEY_FLAG); /* CLient端发送写请求时，数据不是以'\0'结尾 */
+    /* New mode: phone-driven provisioning. If the write payload is the full
+     * struct size and starts with the WIFI_SSID_KEY flag, treat it as creds
+     * sent FROM the phone and hand them off to wifi_task. */
+    flag_len = strlen(WIFI_SSID_KEY_FLAG);
+    if (write_cb_para->length == sizeof(example_wifi_ssid_key_ntf_ind_t) &&
+        memcmp((void *)write_cb_para->value, (void *)WIFI_SSID_KEY_FLAG, flag_len) == 0) {
+        const example_wifi_ssid_key_ntf_ind_t *p =
+            (const example_wifi_ssid_key_ntf_ind_t *)write_cb_para->value;
+        PRINT("[SLE Server] credentials received from peer (ssid_len=%d, key_len=%d)\r\n",
+              p->ssid_len, p->key_len);
+        sle_provisioning_creds_received((const char *)p->ssid, p->ssid_len,
+                                        (const char *)p->key,  p->key_len);
+        return;
+    }
+
+    /* Legacy mode (HiHope original): if peer writes just the flag string,
+     * server replies with hardcoded creds via notify. Kept for two-board demo. */
     if (write_cb_para->length == flag_len &&
         memcmp((void *)write_cb_para->value, (void *)WIFI_SSID_KEY_FLAG, flag_len) == 0) {
 

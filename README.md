@@ -58,7 +58,18 @@ SLE 服务 UUID：
 
 ---
 
-## 真正的手机配网（你后续要做的事）
+## 配套的鸿蒙 App
+
+仓库里 `harmony_app/` 目录提供了一个 3 文件 ArkTS App，**已经能跑通真·手机配网流程**：
+扫描 → 连接板子 → 输入 SSID/密码 → 写入 → 板子收到并连 WiFi。
+
+把 `harmony_app/{Index.ets, NearLinkService.ets, ProvisioningPayload.ets}` 拷到你 DevEco Studio 工程对应位置，并在 `module.json5` 加 NearLink 权限即可。详情看 `harmony_app/README.md`。
+
+板端已经实现凭据接收：`example_network_info_write_request_cbk` 现在能识别 117 字节的标准结构并交给 `wifi_task` 去连。
+
+---
+
+## 旧的两板演示模式（保留）
 
 当前 `sle_server/src/SLE_Distribute_Network_Server.c` 里的
 `example_network_info_write_request_cbk()` 行为是：

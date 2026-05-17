@@ -206,9 +206,18 @@ static errcode_t example_sle_set_default_announce_data(void)
     return ERRCODE_SUCC;
 }
 
+/* Exported to app_demo.c — flip to "really advertising" only when the
+ * SDK callback confirms it. */
+extern volatile int g_sle_state;
+
 void example_sle_announce_enable_cbk(uint32_t announce_id, errcode_t status)
 {
     PRINT("[SLE Adv] sle announce enable id:%02x, state:%02x\r\n", announce_id, status);
+    if (status == ERRCODE_SUCC) {
+        g_sle_state = 7;   /* true advertising */
+    } else {
+        g_sle_state = 14;  /* adv failed at the radio layer */
+    }
 }
 
 void example_sle_announce_disable_cbk(uint32_t announce_id, errcode_t status)
@@ -238,15 +247,30 @@ void example_sle_announce_register_cbks(void)
 
 errcode_t example_sle_server_adv_init(void)
 {
+    errcode_t ret;
     PRINT("[SLE Adv] example_sle_server_adv_init in\r\n");
     example_sle_announce_register_cbks();
-    example_sle_set_default_announce_param();
-    example_sle_set_default_announce_data();
+
+    ret = example_sle_set_default_announce_param();
+    if (ret != ERRCODE_SUCC) {
+        PRINT("[SLE Adv] set_default_announce_param fail: 0x%x\r\n", ret);
+        return ret;
+    }
+
+    ret = example_sle_set_default_announce_data();
+    if (ret != ERRCODE_SUCC) {
+        PRINT("[SLE Adv] set_default_announce_data fail: 0x%x\r\n", ret);
+        return ret;
+    }
 
     example_sle_set_addr();
     example_sle_set_name();
 
-    sle_start_announce(SLE_ADV_HANDLE_DEFAULT);
-    PRINT("[SLE Adv] example_sle_server_adv_init out\r\n");
+    ret = sle_start_announce(SLE_ADV_HANDLE_DEFAULT);
+    if (ret != ERRCODE_SUCC) {
+        PRINT("[SLE Adv] sle_start_announce FAILED: 0x%x\r\n", ret);
+        return ret;
+    }
+    PRINT("[SLE Adv] sle_start_announce returned OK (await announce_enable_cbk for confirm)\r\n");
     return ERRCODE_SUCC;
 }

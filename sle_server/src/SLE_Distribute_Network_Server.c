@@ -456,8 +456,11 @@ static int example_sle_distribute_network_server_task(const char *arg)
         return -1;
     }
 
-    g_sle_state = 7;
-    PRINT("[SLE Server] init ok, advertising as SLE_DISTRIBUTE_SERVER\r\n");
+    /* sle_start_announce was called; the SDK confirms (or denies) actual
+     * radio-level advertising via example_sle_announce_enable_cbk which
+     * will set g_sle_state to 7 (OK) or 14 (FAIL). */
+    g_sle_state = 6;
+    PRINT("[SLE Server] init ok, awaiting announce_enable_cbk for true ADVERTISING\r\n");
 
     return 0;
 }

@@ -82,6 +82,7 @@ static const char *sle_state_str(int s)
         case 3:  return "SLE: reg ssaps cbks";
         case 4:  return "SLE: add server    ";
         case 5:  return "SLE: setup adv     ";
+        case 6:  return "SLE: awaiting cb...";
         case 7:  return "SLE: ADVERTISING   ";
         case 10: return "SLE FAIL: enable   ";
         case 11: return "SLE FAIL: cbks     ";

@@ -41,7 +41,6 @@ extern errcode_t example_sta_function(const char *ssid, uint8_t ssid_len,
 
 /* shared status reported to LCD */
 static volatile int g_wifi_state = 0;  /* 0=connecting, 1=ok, 2=fail */
-static char         g_wifi_ip[24] = "";
 
 /* =========================================================
  *  WiFi STA task

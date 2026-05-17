@@ -1,0 +1,20 @@
+# Build artifacts that could land in this dir
+*.o
+*.obj
+*.d
+*.a
+build/
+out/
+.cache/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini

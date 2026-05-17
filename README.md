@@ -1,7 +1,9 @@
 # haisi_ws63_weixing
 
-WS63 SDK 上的个人开发分仓。只跟踪自己的应用代码，不带 SDK 母体；
-克隆到 SDK 的预留扩展点 `src/application/samples/custom/`，**SDK 源码零修改**。
+WS63 SDK 个人开发分仓 —— 目前内容是 **4T_HRM_QS2 开发板的 LCD demo**
+（ILI9341 2.8 寸屏，4 线软件 SPI 驱动）。
+
+挂载点 `src/application/samples/custom/`，**SDK 源码零修改**。
 
 ---
 
@@ -9,85 +11,52 @@ WS63 SDK 上的个人开发分仓。只跟踪自己的应用代码，不带 SDK 
 
 ### 第一次设置
 
-1. 先准备好 WS63 SDK 母体（任何方式：HiSpark Studio 自动下载、Gitee `HiSpark/fbb_ws63` ZIP、U 盘拷贝……），假设解压到 `D:\fbb_ws63-master\`。
+1. 准备好 WS63 SDK 母体到 `D:\fbb_ws63-master\`。
 
-2. 在 PowerShell 把本仓库 clone 进 SDK 的扩展点目录。**注意末尾的 `custom`** —— 这是把仓库下载下来后重命名成 SDK 期望的目录名：
+2. PowerShell 把本仓库 clone 进 SDK 扩展点目录，**末尾的 `custom` 是重命名**：
 
    ```powershell
    cd D:\fbb_ws63-master\src\application\samples
    git clone https://github.com/shodan1q/haisi_ws63_weixing.git custom
    ```
 
-   完成后目录是这样：
-   ```
-   src/application/samples/custom/
-   ├── .git/
-   ├── .gitignore
-   ├── .gitattributes
-   ├── README.md
-   ├── CMakeLists.txt
-   └── main.c
+3. 如果之前已经 clone 过旧版（占位 `main.c`），更新即可：
+
+   ```powershell
+   cd D:\fbb_ws63-master\src\application\samples\custom
+   git pull
    ```
 
-3. 打开 HiSpark Studio，工程根选 `D:\fbb_ws63-master\src`，新建工程。
+4. HiSpark Studio 工程根选 `D:\fbb_ws63-master\src`。
 
-4. **Kconfig → Application → ✓ Enable Sample**（主开关 `SAMPLE_ENABLE` 打开就行，不需要勾任何 sub-sample），保存。
+5. **Kconfig → Application → ✓ Enable Sample**（主开关 `SAMPLE_ENABLE`），保存。
+   不要勾任何 sub-sample（如 helloworld），否则会和我们的 `app_run` 同时跑。
 
-5. `Rebuild` → 烧录 → 串口监视器，能看到：
-   ```
-   [weixing] task started
-   [weixing] alive
-   [weixing] alive
-   ...
-   ```
+6. **Clean + Build**（一定要 clean，因为新增了文件，需要 cmake 重新扫）。
 
-### 日常开发
+7. 烧录，按 RST 复位。
 
-只在 `custom/` 这个目录里改代码，git 只管这个仓库：
+### 预期效果
 
-```powershell
-cd D:\fbb_ws63-master\src\application\samples\custom
-git status                # 只会显示你自己的改动
-git add -A
-git commit -m "your message"
-git push
-```
-
-SDK 编译会自动把 `main.c` 编进 samples 组件并链接进固件，
-入口函数通过 `app_run(weixing_entry)` 宏在 boot 时自动调用。
+- 串口看到：`***** Software LCD Flash Test Start *****`
+- 屏幕：先蓝色清屏，然后白底黑字显示 `Line 0` ~ `Line 9` 共 10 行
 
 ---
 
-## 为什么这么放
+## 硬件引脚（来自 `lcd.c`）
 
-`src/application/samples/CMakeLists.txt` 里有这一行：
+| 信号 | GPIO | 接 |
+|---|---|---|
+| SPI_SCK | 6 | LCD CLK |
+| SPI_MOSI | 1 | LCD DI |
+| SPI_MISO | 4 | LCD DO |
+| LCD_CS | 5 | LCD CS |
+| LCD_WR (D/C) | 3 | LCD WR/DC |
+| FLASH_CS | 14 | Flash CS (本 demo 不用，仅初始化为高) |
+| SD_CS | 2 | SD CS (本 demo 不用) |
+| RFID_CS | 13 | RFID CS (本 demo 不用) |
 
-```cmake
-add_subdirectory_if_exist(custom)
-```
-
-——SDK 官方预留的"用户自定义子目录"挂载点，`_if_exist` 表示文件夹不存在也不报错。
-所以这个仓库 clone 进去就能编，不 clone 也不会有问题。
-
-`samples` 这个组件本身在 `SAMPLE_ENABLE=y` 时被链接进最终固件，
-因此 Kconfig 里把这个主开关打开就够了，不需要也没有 sub-sample 的开关。
-
----
-
-## 改成多个应用
-
-随着开发推进，如果你想在这一个仓库里放多个 app，把目录结构改成：
-
-```
-custom/
-├── CMakeLists.txt         ← add_subdirectory_if_exist(app_a) + add_subdirectory_if_exist(app_b)
-├── app_a/
-│   ├── CMakeLists.txt     ← set(SOURCES ... PARENT_SCOPE)
-│   └── main.c
-└── app_b/
-    ├── CMakeLists.txt
-    └── main.c
-```
+引脚是 4T_HRM_QS2 板的硬连接，换板需要改 `lcd.c` 顶部的宏。
 
 ---
 
@@ -95,14 +64,19 @@ custom/
 
 | 文件 | 说明 |
 |---|---|
-| `main.c` | 入口示例，使用 osal 创建一个循环 printk 的任务，`app_run` 宏自动注册 |
-| `CMakeLists.txt` | 把 `main.c` append 到 samples 组件的 SOURCES（标准约定） |
-| `.gitignore` | 排除编译中间产物 |
-| `.gitattributes` | Windows 开发场景下的行尾归一化 |
+| `lcd_demo.c` | 入口：创建任务初始化 LCD 并打印 10 行文字。`app_run(base_lcd_demo)` 自动注册 |
+| `lcd.c` / `lcd.h` | ILI9341 4 线软件 SPI 驱动 |
+| `fonts.c` / `fonts.h` | 字库（16x24 ASCII） |
+| `CMakeLists.txt` | 把以上 3 个 .c 加进 samples 组件 |
+| `.gitignore` / `.gitattributes` | 标配 |
+
+源码来自 4T_HRM_QS2 开发板原厂 demo，已修复 `lcd_demo.c` 里
+`#include "LCD.h"` 大小写问题（Windows 编译没事，Linux/Mac 会爆找不到文件）。
 
 ---
 
-## 上游 SDK
+## 上游
 
-- 上游：https://gitee.com/HiSpark/fbb_ws63
-- 完整 SDK 镜像（含 .gitignore/.gitattributes）：https://github.com/shodan1q/haisi_ws63
+- WS63 SDK 上游：https://gitee.com/HiSpark/fbb_ws63
+- 完整 SDK 镜像：https://github.com/shodan1q/haisi_ws63
+- 板厂资料：`/4T_HRM_QS2-main/` （HuaQing 4T_HRM_QS2 开发板）

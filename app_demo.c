@@ -1,14 +1,22 @@
 /*
  * 4T_HRM_QS2 (Hi3863 / WS63) NearLink (SLE) provisioning demo
  *
- *   - SLE server advertises as "SLE_DISTRIBUTE_SERVER".
- *   - LCD shows SLE state + WiFi state.
- *   - Two ways to drive WiFi connection (auto-selected):
- *       a) hardcoded: set WIFI_SSID below — board connects on boot.
- *       b) phone-driven: leave WIFI_SSID as placeholder — board waits for
- *          a NearLink peer to write the 117-byte credentials payload to
- *          property UUID 0x3344, then connects with those creds.
+ * Two-board flow (per HiHope original design):
+ *   - SERVER board advertises as SLE_DISTRIBUTE_SERVER, has hardcoded
+ *     WIFI_SSID/WIFI_KEY, sends them to any peer that writes the trigger
+ *     flag. It also connects WiFi itself using those creds.
+ *   - CLIENT board scans for SERVER, connects, writes "WIFI_SSID_KEY"
+ *     trigger, receives creds via notify, then connects WiFi.
+ *
+ * ─── pick the role for this build ────────────────────────────────────────
  */
+
+#define WS63_ROLE_SERVER 1
+#define WS63_ROLE_CLIENT 2
+
+/* CHANGE THIS LINE PER BOARD: */
+#define WS63_ROLE  WS63_ROLE_SERVER
+/* ─────────────────────────────────────────────────────────────────────── */
 
 #include <stdio.h>
 #include <string.h>
@@ -18,13 +26,18 @@
 #include "app_init.h"
 #include "osal_debug.h"
 #include "lcd.h"
-#include "sle_server/inc/SLE_Distribute_Network_Server.h"
 
-/* ---- Wi-Fi credentials ---- */
-#define WIFI_SSID  "your_ssid_here"      /* placeholder => phone-driven mode */
+#if WS63_ROLE == WS63_ROLE_SERVER
+#include "sle_server/inc/SLE_Distribute_Network_Server.h"
+#else
+#include "sle_client/inc/SLE_Distribute_Network_Client.h"
+#endif
+
+/* ---- Wi-Fi credentials (SERVER role only — edit before flashing) ---- */
+#define WIFI_SSID  "your_ssid_here"
 #define WIFI_KEY   "your_password_here"
 
-/* ---- payload buffer sizes (match SLE server struct) ---- */
+/* ---- payload buffer sizes ---- */
 #define PROV_MAX_SSID_LEN  33
 #define PROV_MAX_KEY_LEN   65
 
@@ -39,41 +52,33 @@
 extern errcode_t example_sta_function(const char *ssid, uint8_t ssid_len,
                                       const char *key,  uint8_t key_len);
 
-/* From sle_server: 0..5 init steps, 7 = OK, 10..14 = fail steps */
-extern volatile int g_sle_state;
-
-/* shared status for LCD */
-static volatile int g_wifi_state = -1;  /* -1 idle/skipped, 0 connecting, 1 ok, 2 fail */
+#if WS63_ROLE == WS63_ROLE_SERVER
+extern volatile int g_sle_state;       /* server state */
+static volatile int g_wifi_state = -1; /* -1 idle, 0 connecting, 1 ok, 2 fail */
 static volatile int g_creds_ready = 0;
-static volatile int g_peer_connected = 0;  /* set true when phone is paired & writing */
 static char         g_received_ssid[PROV_MAX_SSID_LEN] = {0};
 static char         g_received_key[PROV_MAX_KEY_LEN]   = {0};
 static uint8_t      g_received_ssid_len = 0;
 static uint8_t      g_received_key_len  = 0;
 
-/*
- * Called from the SLE write-request callback when a peer writes the full
- * 117-byte credentials struct. Runs in the SLE protocol stack thread, so we
- * just copy out the bytes and let wifi_task do the connect.
- */
 void sle_provisioning_creds_received(const char *ssid, uint8_t ssid_len,
                                      const char *key,  uint8_t key_len)
 {
     if (ssid_len == 0 || ssid_len > PROV_MAX_SSID_LEN ||
         key_len  == 0 || key_len  > PROV_MAX_KEY_LEN) {
-        osal_printk("[prov] invalid lengths ssid=%u key=%u\r\n", ssid_len, key_len);
+        osal_printk("[prov] bad lengths ssid=%u key=%u\r\n", ssid_len, key_len);
         return;
     }
     memcpy(g_received_ssid, ssid, ssid_len);
     memcpy(g_received_key,  key,  key_len);
     g_received_ssid_len = ssid_len;
     g_received_key_len  = key_len;
-    g_peer_connected = 1;
     g_creds_ready = 1;
     osal_printk("[prov] creds stored: ssid=%s\r\n", g_received_ssid);
 }
+#endif /* SERVER */
 
-static const char *sle_state_str(int s)
+static const char *server_state_str(int s)
 {
     switch (s) {
         case 0:  return "SLE: waiting...    ";
@@ -93,6 +98,22 @@ static const char *sle_state_str(int s)
     }
 }
 
+static const char *client_state_str(int s)
+{
+    switch (s) {
+        case 0:  return "CLIENT: starting...";
+        case 1:  return "CLIENT: scanning   ";
+        case 3:  return "CLIENT: connected  ";
+        case 4:  return "CLIENT: got creds  ";
+        case 5:  return "CLIENT: WiFi conn..";
+        case 7:  return "CLIENT: ALL OK     ";
+        case 10: return "CLIENT FAIL: enable";
+        case 14: return "CLIENT FAIL: WiFi  ";
+        default: return "CLIENT: unknown    ";
+    }
+}
+
+#if WS63_ROLE == WS63_ROLE_SERVER
 static const char *wifi_state_str(int s)
 {
     switch (s) {
@@ -109,9 +130,6 @@ static int is_placeholder_ssid(void)
     return strcmp(WIFI_SSID, "your_ssid_here") == 0;
 }
 
-/* =========================================================
- *  WiFi STA task
- * ========================================================= */
 static void *wifi_task(const char *arg)
 {
     unused(arg);
@@ -119,43 +137,34 @@ static void *wifi_task(const char *arg)
     const char *key;
     uint8_t ssid_len, key_len;
 
-    /* Wait for SLE to come up so the radio is settled. */
     while (g_sle_state != 7 && g_sle_state < 10) {
         osal_msleep(500);
     }
 
     if (is_placeholder_ssid()) {
-        /* Phone-driven mode — wait until a NearLink peer writes creds. */
-        osal_printk("[wifi] no hardcoded SSID; waiting for SLE provisioning...\r\n");
+        osal_printk("[wifi] no hardcoded SSID; waiting for SLE creds...\r\n");
         g_wifi_state = -1;
-        while (!g_creds_ready) {
-            osal_msleep(500);
-        }
-        ssid     = g_received_ssid;
-        key      = g_received_key;
+        while (!g_creds_ready) osal_msleep(500);
+        ssid = g_received_ssid;
+        key  = g_received_key;
         ssid_len = g_received_ssid_len;
         key_len  = g_received_key_len;
     } else {
-        /* Hardcoded mode. */
-        ssid     = WIFI_SSID;
-        key      = WIFI_KEY;
+        ssid = WIFI_SSID;
+        key  = WIFI_KEY;
         ssid_len = (uint8_t)(strlen(WIFI_SSID) + 1);
-        key_len  = (uint8_t)(strlen(WIFI_KEY) + 1);
+        key_len  = (uint8_t)(strlen(WIFI_KEY)  + 1);
     }
 
     osal_printk("[wifi] starting STA to SSID=%s\r\n", ssid);
     g_wifi_state = 0;
 
     errcode_t ret = example_sta_function(ssid, ssid_len, key, key_len);
-    if (ret == ERRCODE_SUCC) {
-        g_wifi_state = 1;
-        osal_printk("[wifi] connected\r\n");
-    } else {
-        g_wifi_state = 2;
-        osal_printk("[wifi] failed, ret=0x%x\r\n", ret);
-    }
+    g_wifi_state = (ret == ERRCODE_SUCC) ? 1 : 2;
+    osal_printk("[wifi] result=0x%x\r\n", ret);
     return NULL;
 }
+#endif /* SERVER */
 
 /* =========================================================
  *  LCD task
@@ -163,40 +172,57 @@ static void *wifi_task(const char *arg)
 static void *lcd_task(const char *arg)
 {
     unused(arg);
-    char header[] = "WS63 NearLink Cfg";
-    char hint[]   = "Name: SLE_DISTRIBUTE_SERVER";
-    char ssid_line[32] = "";
-    char counter[32];
 
     spi_lcd_init();
     spi_lcd_clear(BLACK);
+
+#if WS63_ROLE == WS63_ROLE_SERVER
+    char header[] = "WS63 SLE Server";
+    char hint[]   = "Name: SLE_DISTRIBUTE_SERVER";
+#else
+    char header[] = "WS63 SLE Client";
+    char hint[]   = "Seek: SLE_DISTRIBUTE_SERVER";
+#endif
+    char counter[32];
+    char ssid_line[32];
+
     spi_lcd_display_string_line(0, 0, GREEN, BLACK, (uint8_t *)header);
     spi_lcd_display_string_line(0, 1, WHITE, BLACK, (uint8_t *)hint);
 
-    int last_sle = -999, last_wifi = -999, last_creds = -1;
+    int last_sle = -999;
+    int last_creds_or_wifi = -999;
     uint32_t tick = 0;
+
     for (;;) {
-        if (g_sle_state != last_sle) {
-            last_sle = g_sle_state;
-            uint16_t color = (last_sle == 7) ? GREEN
-                           : (last_sle >= 10) ? RED : WHITE;
-            spi_lcd_display_string_line(0, 3, color, BLACK,
-                                        (uint8_t *)sle_state_str(last_sle));
+#if WS63_ROLE == WS63_ROLE_SERVER
+        int s = g_sle_state;
+        if (s != last_sle) {
+            last_sle = s;
+            uint16_t color = (s == 7) ? GREEN : (s >= 10 ? RED : WHITE);
+            spi_lcd_display_string_line(0, 3, color, BLACK, (uint8_t *)server_state_str(s));
         }
-        if (g_wifi_state != last_wifi) {
-            last_wifi = g_wifi_state;
-            uint16_t color = (last_wifi == 1) ? GREEN
-                           : (last_wifi == 2) ? RED : WHITE;
-            spi_lcd_display_string_line(0, 5, color, BLACK,
-                                        (uint8_t *)wifi_state_str(last_wifi));
+        int w = g_wifi_state;
+        if (w != last_creds_or_wifi) {
+            last_creds_or_wifi = w;
+            uint16_t color = (w == 1) ? GREEN : (w == 2 ? RED : WHITE);
+            spi_lcd_display_string_line(0, 5, color, BLACK, (uint8_t *)wifi_state_str(w));
         }
-        if (g_creds_ready != last_creds) {
-            last_creds = g_creds_ready;
-            if (g_creds_ready) {
-                snprintf(ssid_line, sizeof(ssid_line), "SSID: %s", g_received_ssid);
-                spi_lcd_display_string_line(0, 6, GREEN, BLACK, (uint8_t *)ssid_line);
-            }
+        if (g_creds_ready) {
+            snprintf(ssid_line, sizeof(ssid_line), "SSID: %s", g_received_ssid);
+            spi_lcd_display_string_line(0, 6, GREEN, BLACK, (uint8_t *)ssid_line);
         }
+#else
+        int s = g_sle_client_state;
+        if (s != last_sle) {
+            last_sle = s;
+            uint16_t color = (s == 7) ? GREEN : (s >= 10 ? RED : WHITE);
+            spi_lcd_display_string_line(0, 3, color, BLACK, (uint8_t *)client_state_str(s));
+        }
+        if (s >= 4) {
+            snprintf(ssid_line, sizeof(ssid_line), "SSID: %s", sle_client_get_ssid());
+            spi_lcd_display_string_line(0, 5, GREEN, BLACK, (uint8_t *)ssid_line);
+        }
+#endif
         tick++;
         snprintf(counter, sizeof(counter), "Uptime: %lu s",
                  (unsigned long)(tick * LCD_REFRESH_MS / 1000));
@@ -214,16 +240,20 @@ static void app_entry(void)
     osal_task *h;
 
     osal_kthread_lock();
-
     h = osal_kthread_create((osal_kthread_handler)lcd_task, NULL, "LcdTask", TASK_STACK_SIZE);
     if (h) osal_kthread_set_priority(h, LCD_TASK_PRIO);
 
+#if WS63_ROLE == WS63_ROLE_SERVER
     h = osal_kthread_create((osal_kthread_handler)wifi_task, NULL, "WifiTask", WIFI_TASK_STACK_SIZE);
     if (h) osal_kthread_set_priority(h, WIFI_TASK_PRIO);
-
+#endif
     osal_kthread_unlock();
 
+#if WS63_ROLE == WS63_ROLE_SERVER
     sle_provisioning_server_start();
+#else
+    sle_provisioning_client_start();
+#endif
 }
 
 app_run(app_entry);

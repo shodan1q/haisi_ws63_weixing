@@ -1,62 +1,75 @@
 # haisi_ws63_weixing
 
-WS63 SDK 个人开发分仓 —— 目前内容是 **4T_HRM_QS2 开发板的 LCD demo**
-（ILI9341 2.8 寸屏，4 线软件 SPI 驱动）。
+WS63 个人开发分仓 —— **4T_HRM_QS2 综合演示**：
+
+| 外设 | 行为 |
+|---|---|
+| LCD (ILI9341, 软件 SPI) | 顶行 "Hello WS63"，按键按下显示对应消息，底行显示运行时长 |
+| 3 颗 LED (红/绿/黄) | 同步闪烁，周期 1 秒 |
+| 蜂鸣器 (PWM) | 每 10 秒响一次，~150ms |
+| 4 个按键 (ADC 多路复用) | KEY1~4 各显示一条不同消息 + 串口打印 |
 
 挂载点 `src/application/samples/custom/`，**SDK 源码零修改**。
 
 ---
 
-## 怎么用（Windows）
+## Windows 上怎么用
 
-### 第一次设置
+```powershell
+# 第一次：clone 到 SDK 扩展点
+cd D:\fbb_ws63-master\src\application\samples
+git clone https://github.com/shodan1q/haisi_ws63_weixing.git custom
 
-1. 准备好 WS63 SDK 母体到 `D:\fbb_ws63-master\`。
+# 已经 clone 过：拉新代码
+cd D:\fbb_ws63-master\src\application\samples\custom
+git pull
 
-2. PowerShell 把本仓库 clone 进 SDK 扩展点目录，**末尾的 `custom` 是重命名**：
+# HiSpark Studio：
+#   Kconfig → Application → ✓ Enable Sample → Save
+#   Clean → Build → 烧录 → 按 RST
+```
 
-   ```powershell
-   cd D:\fbb_ws63-master\src\application\samples
-   git clone https://github.com/shodan1q/haisi_ws63_weixing.git custom
-   ```
-
-3. 如果之前已经 clone 过旧版（占位 `main.c`），更新即可：
-
-   ```powershell
-   cd D:\fbb_ws63-master\src\application\samples\custom
-   git pull
-   ```
-
-4. HiSpark Studio 工程根选 `D:\fbb_ws63-master\src`。
-
-5. **Kconfig → Application → ✓ Enable Sample**（主开关 `SAMPLE_ENABLE`），保存。
-   不要勾任何 sub-sample（如 helloworld），否则会和我们的 `app_run` 同时跑。
-
-6. **Clean + Build**（一定要 clean，因为新增了文件，需要 cmake 重新扫）。
-
-7. 烧录，按 RST 复位。
-
-### 预期效果
-
-- 串口看到：`***** Software LCD Flash Test Start *****`
-- 屏幕：先蓝色清屏，然后白底黑字显示 `Line 0` ~ `Line 9` 共 10 行
+预期：
+- 串口前几行有 boot 日志，按键时会看到 `KEY1 pressed` ~ `KEY4 pressed`
+- LCD 顶行黑底白字 `Hello WS63`
+- 红 / 绿 / 黄三个 LED 同步闪
+- 大约每 10 秒蜂鸣器响一短声
 
 ---
 
-## 硬件引脚（来自 `lcd.c`）
+## 引脚（来自 4T_HRM_QS2 协议文档）
 
-| 信号 | GPIO | 接 |
+| 外设 | GPIO | 备注 |
 |---|---|---|
-| SPI_SCK | 6 | LCD CLK |
-| SPI_MOSI | 1 | LCD DI |
-| SPI_MISO | 4 | LCD DO |
-| LCD_CS | 5 | LCD CS |
-| LCD_WR (D/C) | 3 | LCD WR/DC |
-| FLASH_CS | 14 | Flash CS (本 demo 不用，仅初始化为高) |
-| SD_CS | 2 | SD CS (本 demo 不用) |
-| RFID_CS | 13 | RFID CS (本 demo 不用) |
+| LCD WR/DC | GPIO_03 | 由 `lcd.c` 驱动 |
+| LCD CS | GPIO_05 | 同上 |
+| SPI MOSI/MISO/CLK | GPIO_01 / 04 / 06 | 软件 SPI |
+| LED1 红 | GPIO_10 | `app_demo.c` 中 `LED_RED_PIN` |
+| LED2 绿 | GPIO_11 | `LED_GREEN_PIN` |
+| LED3 黄 | GPIO_12 | `LED_YELLOW_PIN` |
+| 蜂鸣器 | GPIO_07 | PWM 通道 7 |
+| ADC 按键 | GPIO_08 | ADC ch1，4 键电压分压 |
 
-引脚是 4T_HRM_QS2 板的硬连接，换板需要改 `lcd.c` 顶部的宏。
+按键电压判定（来自板厂原 demo，已实测）：
+
+| 电压 (mV) | 键 |
+|---|---|
+| ≤ 500 | KEY1 |
+| 1000 ~ 2000 | KEY2 |
+| 2100 ~ 2500 | KEY3 |
+| 2600 ~ 2800 | KEY4 |
+
+---
+
+## 想改什么
+
+| 想改 | 改这里 |
+|---|---|
+| LCD 显示内容 | `app_demo.c` `lcd_task()` 里的字符串，按键消息在 `key_messages[]` |
+| LED 闪烁速度 | `LED_HALF_PERIOD_MS`（500=1Hz） |
+| 蜂鸣器频次 | `BUZZ_INTERVAL_MS` (10000=10s) / `BUZZ_DURATION_MS` |
+| LED 改为轮流亮 | `led_task()` 改成 for 循环逐个点亮 |
+| 按键动作变成切换颜色 | `lcd_task()` 里根据 key id 改 `spi_lcd_clear()` 颜色 |
 
 ---
 
@@ -64,19 +77,14 @@ WS63 SDK 个人开发分仓 —— 目前内容是 **4T_HRM_QS2 开发板的 LCD
 
 | 文件 | 说明 |
 |---|---|
-| `lcd_demo.c` | 入口：创建任务初始化 LCD 并打印 10 行文字。`app_run(base_lcd_demo)` 自动注册 |
-| `lcd.c` / `lcd.h` | ILI9341 4 线软件 SPI 驱动 |
-| `fonts.c` / `fonts.h` | 字库（16x24 ASCII） |
-| `CMakeLists.txt` | 把以上 3 个 .c 加进 samples 组件 |
-| `.gitignore` / `.gitattributes` | 标配 |
-
-源码来自 4T_HRM_QS2 开发板原厂 demo，已修复 `lcd_demo.c` 里
-`#include "LCD.h"` 大小写问题（Windows 编译没事，Linux/Mac 会爆找不到文件）。
+| `app_demo.c` | 主入口，4 个任务（LCD/LED/Buzzer/ADC button）+ `app_run` |
+| `lcd.c` / `lcd.h` | ILI9341 4 线软件 SPI 驱动（板厂原版） |
+| `fonts.c` / `fonts.h` | ASCII 字库（板厂原版） |
+| `CMakeLists.txt` | 把 `app_demo.c + lcd.c + fonts.c` 接进 samples 组件 |
 
 ---
 
 ## 上游
-
 - WS63 SDK 上游：https://gitee.com/HiSpark/fbb_ws63
 - 完整 SDK 镜像：https://github.com/shodan1q/haisi_ws63
-- 板厂资料：`/4T_HRM_QS2-main/` （HuaQing 4T_HRM_QS2 开发板）
+- 板厂资料：4T_HRM_QS2（华清远见）

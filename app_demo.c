@@ -103,18 +103,29 @@ static void *buzz_task(const char *arg)
     pwm_config_t cfg = {10000, 10000, 0, 0xFF, true};
     uint8_t channel_id = BUZZ_PWM_CHANNEL;
 
-    uapi_pin_set_mode(BUZZ_PIN, 1);   /* PWM function */
+    /* Start silent: pin as GPIO low, PWM not yet connected */
+    uapi_pin_set_mode(BUZZ_PIN, HAL_PIO_FUNC_GPIO);
+    uapi_gpio_set_dir(BUZZ_PIN, GPIO_DIRECTION_OUTPUT);
+    uapi_gpio_set_val(BUZZ_PIN, GPIO_LEVEL_LOW);
+
+    /* Spin up PWM once and leave it running in background. We mute/unmute
+     * by switching the pin's mode between GPIO (silent low) and PWM (sounds).
+     * This sidesteps the V151 stop-group semantics that didn't actually mute. */
     uapi_pwm_deinit();
     uapi_pwm_init();
     uapi_pwm_open(BUZZ_PWM_CHANNEL, &cfg);
-    /* WS63 PWM is V151 — group-based start/stop */
     uapi_pwm_set_group(BUZZ_PWM_GROUP, &channel_id, 1);
+    uapi_pwm_start_group(BUZZ_PWM_GROUP);
 
     for (;;) {
         osal_msleep(BUZZ_INTERVAL_MS);
-        uapi_pwm_start_group(BUZZ_PWM_GROUP);
+        /* Connect PWM signal to the buzzer pin */
+        uapi_pin_set_mode(BUZZ_PIN, 1);
         osal_msleep(BUZZ_DURATION_MS);
-        uapi_pwm_stop_group(BUZZ_PWM_GROUP);
+        /* Disconnect: pin back to GPIO output low → buzzer silent */
+        uapi_pin_set_mode(BUZZ_PIN, HAL_PIO_FUNC_GPIO);
+        uapi_gpio_set_dir(BUZZ_PIN, GPIO_DIRECTION_OUTPUT);
+        uapi_gpio_set_val(BUZZ_PIN, GPIO_LEVEL_LOW);
     }
     return NULL;
 }

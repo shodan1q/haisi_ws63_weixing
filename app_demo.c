@@ -78,6 +78,7 @@ void sle_provisioning_creds_received(const char *ssid, uint8_t ssid_len,
 }
 #endif /* SERVER */
 
+#if WS63_ROLE == WS63_ROLE_SERVER
 static const char *server_state_str(int s)
 {
     switch (s) {
@@ -97,7 +98,7 @@ static const char *server_state_str(int s)
         default: return "SLE: unknown       ";
     }
 }
-
+#else
 static const char *client_state_str(int s)
 {
     switch (s) {
@@ -112,6 +113,7 @@ static const char *client_state_str(int s)
         default: return "CLIENT: unknown    ";
     }
 }
+#endif
 
 #if WS63_ROLE == WS63_ROLE_SERVER
 static const char *wifi_state_str(int s)

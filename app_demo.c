@@ -32,6 +32,7 @@
 #define LED_YELLOW_PIN     12
 #define BUZZ_PIN           7
 #define BUZZ_PWM_CHANNEL   7
+#define BUZZ_PWM_GROUP     0
 
 /* ---- timing ---- */
 #define LED_HALF_PERIOD_MS    500    /* 500ms on + 500ms off = 1Hz blink */
@@ -100,17 +101,20 @@ static void *buzz_task(const char *arg)
     unused(arg);
     /* 1kHz square wave, 50% duty (matches board's pwm_t.c) */
     pwm_config_t cfg = {10000, 10000, 0, 0xFF, true};
+    uint8_t channel_id = BUZZ_PWM_CHANNEL;
 
     uapi_pin_set_mode(BUZZ_PIN, 1);   /* PWM function */
     uapi_pwm_deinit();
     uapi_pwm_init();
     uapi_pwm_open(BUZZ_PWM_CHANNEL, &cfg);
+    /* WS63 PWM is V151 — group-based start/stop */
+    uapi_pwm_set_group(BUZZ_PWM_GROUP, &channel_id, 1);
 
     for (;;) {
         osal_msleep(BUZZ_INTERVAL_MS);
-        uapi_pwm_start(BUZZ_PWM_CHANNEL);
+        uapi_pwm_start_group(BUZZ_PWM_GROUP);
         osal_msleep(BUZZ_DURATION_MS);
-        uapi_pwm_stop(BUZZ_PWM_CHANNEL);
+        uapi_pwm_stop_group(BUZZ_PWM_GROUP);
     }
     return NULL;
 }

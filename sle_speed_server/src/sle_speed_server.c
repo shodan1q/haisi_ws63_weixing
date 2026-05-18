@@ -301,6 +301,12 @@ static errcode_t sle_uuid_server_add(void)
     return ERRCODE_SLE_SUCCESS;
 }
 
+/* LCD-visible state. Updated by callbacks below.
+ *   0 = waiting (advertising), 1 = client connected, 2 = client disconnected. */
+volatile int g_server_link_state = 0;
+/* Short hex string of last peer addr (5 bytes shown). For LCD use. */
+char g_server_peer_addr[24] = "--:**:**:**:**:**";
+
 static void sle_connect_state_changed_cbk(uint16_t conn_id, const sle_addr_t *addr,
     sle_acb_state_t conn_state, sle_pair_state_t pair_state, sle_disc_reason_t disc_reason)
 {
@@ -316,8 +322,13 @@ static void sle_connect_state_changed_cbk(uint16_t conn_id, const sle_addr_t *ad
     parame.max_latency = 0;
     parame.supervision_timeout = SPEED_DEFAULT_TIMEOUT_MULTIPLIER;
     if (conn_state ==  SLE_ACB_STATE_CONNECTED) {
+        snprintf(g_server_peer_addr, sizeof(g_server_peer_addr),
+                 "%02x:**:**:**:%02x:%02x",
+                 addr->addr[BT_INDEX_0], addr->addr[BT_INDEX_4], addr->addr[BT_INDEX_5]);
+        g_server_link_state = 1;
         sle_update_connect_param(&parame);
     } else if (conn_state == SLE_ACB_STATE_DISCONNECTED) {
+        g_server_link_state = 2;
         destroy_send_data_thread();
         sle_start_announce(SLE_ADV_HANDLE_DEFAULT);
     }

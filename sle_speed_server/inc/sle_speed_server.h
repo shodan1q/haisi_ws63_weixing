@@ -92,4 +92,10 @@ void sle_enable_server_cbk(void);
 /* Boot entry for SERVER role — called by app_demo.c when WS63_ROLE == SERVER. */
 void sle_speed_server_entry(void);
 
+/* LCD-visible link state set by the connect-state callback:
+ *   0 = advertising (no peer), 1 = client connected, 2 = disconnected */
+extern volatile int g_server_link_state;
+/* Short addr string of last peer (e.g., "05:**:**:**:06:03"). */
+extern char g_server_peer_addr[24];
+
 #endif

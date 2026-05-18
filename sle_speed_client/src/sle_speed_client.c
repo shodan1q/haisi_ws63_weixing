@@ -107,12 +107,24 @@ void sle_sample_seek_disable_cbk(errcode_t status)
     }
 }
 
+/* LCD-visible state: 0 scanning, 1 server found, 2 connected, 3 disconnected. */
+volatile int g_client_link_state = 0;
+/* Short addr string of last matched server. */
+char g_client_peer_addr[24] = "--:**:**:**:**:**";
+/* Number of packets received from server (rough live counter for LCD). */
+volatile uint32_t g_client_recv_pkts = 0;
+
 void sle_sample_seek_result_info_cbk(sle_seek_result_info_t *seek_result_data)
 {
     if (seek_result_data != NULL) {
         uint8_t mac[SLE_ADDR_LEN] = {0x11, 0x22, 0x33, 0x44, 0x55, 0x66};
         if (memcmp(seek_result_data->addr.addr, mac, SLE_ADDR_LEN) == 0) {
             (void)memcpy_s(&g_remote_addr, sizeof(sle_addr_t), &seek_result_data->addr, sizeof(sle_addr_t));
+            snprintf(g_client_peer_addr, sizeof(g_client_peer_addr),
+                     "%02x:**:**:**:%02x:%02x",
+                     seek_result_data->addr.addr[0], seek_result_data->addr.addr[4],
+                     seek_result_data->addr.addr[5]);
+            g_client_link_state = 1;
             sle_stop_seek();
         }
     }
@@ -152,6 +164,7 @@ static void sle_speed_notification_cb(uint8_t client_id, uint16_t conn_id, ssapc
         g_count_before_get_us = g_count_after_get_us;
     }
     g_recv_pkt_num++;
+    g_client_recv_pkts = g_recv_pkt_num;
 }
 
 static void sle_speed_indication_cb(uint8_t client_id, uint16_t conn_id, ssapc_handle_value_t *data,
@@ -183,7 +196,9 @@ void sle_sample_connect_state_changed_cbk(uint16_t conn_id, const sle_addr_t *ad
             sle_pair_remote_device(&g_remote_addr);
         }
         g_conn_id = conn_id;
+        g_client_link_state = 2;
     } else if (conn_state == SLE_ACB_STATE_DISCONNECTED) {
+        g_client_link_state = 3;
         sle_start_scan();
         g_recv_pkt_num = 0;
     }

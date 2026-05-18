@@ -1,10 +1,8 @@
 /*
  * 4T_HRM_QS2 (Hi3863 / WS63) two-board SLE throughput demo
  *
- * Uses the SDK official sle_speed_{server,client} samples (from
- * src/application/samples/bt/sle/) imported into our custom/ tree.
- * No protocol changes — known-good SDK code. The only thing this file
- * does is pick a role at compile time and show it on the LCD.
+ * Uses the SDK official sle_speed_{server,client} samples imported into
+ * our custom/ tree. LCD shows connection state in real time.
  *
  * ─── pick role per board ────────────────────────────────────────────────
  */
@@ -30,7 +28,30 @@
 
 #define TASK_STACK_SIZE   0x1000
 #define LCD_TASK_PRIO     26
-#define LCD_REFRESH_MS    500
+#define LCD_REFRESH_MS    300
+
+#if WS63_ROLE == WS63_ROLE_SERVER
+static const char *server_state_str(int s)
+{
+    switch (s) {
+        case 0:  return "STATE: advertising ";
+        case 1:  return "STATE: CONNECTED   ";
+        case 2:  return "STATE: disconnected";
+        default: return "STATE: unknown     ";
+    }
+}
+#else
+static const char *client_state_str(int s)
+{
+    switch (s) {
+        case 0:  return "STATE: scanning    ";
+        case 1:  return "STATE: server FOUND";
+        case 2:  return "STATE: CONNECTED   ";
+        case 3:  return "STATE: disconnected";
+        default: return "STATE: unknown     ";
+    }
+}
+#endif
 
 static void *lcd_task(const char *arg)
 {
@@ -39,24 +60,53 @@ static void *lcd_task(const char *arg)
 #if WS63_ROLE == WS63_ROLE_SERVER
     char header[] = "WS63 SLE SPEED";
     char role[]   = "Role: SERVER";
-    char info[]   = "Adv -> wait peer";
     uint16_t hcol = GREEN;
 #else
     char header[] = "WS63 SLE SPEED";
     char role[]   = "Role: CLIENT";
-    char info[]   = "Seek -> connect";
     uint16_t hcol = BLUE2;
 #endif
     char counter[32];
+    char peer_line[32];
+    char extra_line[32];
 
     spi_lcd_init();
     spi_lcd_clear(BLACK);
     spi_lcd_display_string_line(0, 0, hcol,  BLACK, (uint8_t *)header);
     spi_lcd_display_string_line(0, 2, WHITE, BLACK, (uint8_t *)role);
-    spi_lcd_display_string_line(0, 4, WHITE, BLACK, (uint8_t *)info);
 
+    int last_state = -1;
     uint32_t tick = 0;
+
     for (;;) {
+#if WS63_ROLE == WS63_ROLE_SERVER
+        int s = g_server_link_state;
+        if (s != last_state) {
+            last_state = s;
+            uint16_t color = (s == 1) ? GREEN : (s == 2 ? RED : WHITE);
+            spi_lcd_display_string_line(0, 3, color, BLACK,
+                                        (uint8_t *)server_state_str(s));
+            if (s == 1 || s == 2) {
+                snprintf(peer_line, sizeof(peer_line), "Peer: %s", g_server_peer_addr);
+                spi_lcd_display_string_line(0, 4, color, BLACK, (uint8_t *)peer_line);
+            }
+        }
+#else
+        int s = g_client_link_state;
+        if (s != last_state) {
+            last_state = s;
+            uint16_t color = (s == 2) ? GREEN : (s == 3 ? RED : WHITE);
+            spi_lcd_display_string_line(0, 3, color, BLACK,
+                                        (uint8_t *)client_state_str(s));
+            if (s >= 1 && s <= 2) {
+                snprintf(peer_line, sizeof(peer_line), "Srv: %s", g_client_peer_addr);
+                spi_lcd_display_string_line(0, 4, color, BLACK, (uint8_t *)peer_line);
+            }
+        }
+        snprintf(extra_line, sizeof(extra_line), "RX pkts: %lu     ",
+                 (unsigned long)g_client_recv_pkts);
+        spi_lcd_display_string_line(0, 5, WHITE, BLACK, (uint8_t *)extra_line);
+#endif
         tick++;
         snprintf(counter, sizeof(counter), "Uptime: %lu s",
                  (unsigned long)(tick * LCD_REFRESH_MS / 1000));

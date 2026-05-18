@@ -192,7 +192,9 @@ static void *lcd_task(const char *arg)
     spi_lcd_display_string_line(0, 1, WHITE, BLACK, (uint8_t *)hint);
 
     int last_sle = -999;
+#if WS63_ROLE == WS63_ROLE_SERVER
     int last_creds_or_wifi = -999;
+#endif
     uint32_t tick = 0;
 
     for (;;) {

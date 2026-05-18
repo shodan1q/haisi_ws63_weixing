@@ -68,7 +68,9 @@ static void *lcd_task(const char *arg)
 #endif
     char counter[32];
     char peer_line[32];
+#if WS63_ROLE == WS63_ROLE_CLIENT
     char extra_line[32];
+#endif
 
     spi_lcd_init();
     spi_lcd_clear(BLACK);

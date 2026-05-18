@@ -362,13 +362,13 @@ static void sle_pair_complete_cbk(uint16_t conn_id, const sle_addr_t *addr, errc
     sle_start_announce(SLE_ADV_HANDLE_DEFAULT);
 }
 
-void sle_sample_update_cbk(uint16_t conn_id, errcode_t status, const sle_connection_param_update_evt_t *param)
+static void sle_sample_update_cbk(uint16_t conn_id, errcode_t status, const sle_connection_param_update_evt_t *param)
 {
     unused(status);
     osal_printk("[ssap server] updat state changed conn_id:%d, interval = 0x%02x\n", conn_id, param->interval);
 }
 
-void sle_sample_update_req_cbk(uint16_t conn_id, errcode_t status, const sle_connection_param_update_req_t *param)
+static void sle_sample_update_req_cbk(uint16_t conn_id, errcode_t status, const sle_connection_param_update_req_t *param)
 {
     unused(conn_id);
     unused(status);

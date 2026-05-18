@@ -13,6 +13,8 @@
 #ifndef SLE_CLIENT_ADV_H
 #define SLE_CLIENT_ADV_H
 
+#include "sle_ssap_client.h"
+
 /**
  * @if Eng
  * @brief  sle uuid client init.

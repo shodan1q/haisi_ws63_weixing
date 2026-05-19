@@ -1,18 +1,11 @@
 /*
- * 4T_HRM_QS2 (Hi3863 / WS63) two-board SLE throughput demo
+ * 4T_HRM_QS2 (Hi3863 / WS63) SG90 servo demo
  *
- * Uses the SDK official sle_speed_{server,client} samples imported into
- * our custom/ tree. LCD shows connection state in real time.
- *
- * ─── pick role per board ────────────────────────────────────────────────
+ * Spins up two tasks:
+ *   - servo_task : bit-bangs 50 Hz PWM on GPIO_10 to drive the servo
+ *                  (HiHope-style, the WS63 HW PWM can't reach 50 Hz)
+ *   - lcd_task   : shows the current commanded angle + move counter
  */
-
-#define WS63_ROLE_SERVER 1
-#define WS63_ROLE_CLIENT 2
-
-/* CHANGE THIS PER BOARD: */
-#define WS63_ROLE  WS63_ROLE_SERVER
-/* ──────────────────────────────────────────────────────────────────────── */
 
 #include <stdio.h>
 #include "common_def.h"
@@ -20,95 +13,65 @@
 #include "app_init.h"
 #include "lcd.h"
 
-#if WS63_ROLE == WS63_ROLE_SERVER
-#include "sle_speed_server/inc/sle_speed_server.h"
-#else
-#include "sle_speed_client/inc/sle_speed_client.h"
-#endif
+#include "servo/sg90_control.h"
 
-#define TASK_STACK_SIZE   0x1000
-#define LCD_TASK_PRIO     26
-#define LCD_REFRESH_MS    300
+#define LCD_TASK_STACK_SIZE      0x1000
+#define SERVO_TASK_STACK_SIZE    0x1000
+#define LCD_TASK_PRIO            26
+#define SERVO_TASK_PRIO          17
+#define LCD_REFRESH_MS           200
 
-#if WS63_ROLE == WS63_ROLE_SERVER
-static const char *server_state_str(int s)
+static const char *angle_str(int a)
 {
-    switch (s) {
-        case 0:  return "STATE: advertising ";
-        case 1:  return "STATE: CONNECTED   ";
-        case 2:  return "STATE: disconnected";
-        default: return "STATE: unknown     ";
+    switch (a) {
+        case -90: return "ANGLE:  -90 (right)";
+        case   0: return "ANGLE:    0 (center)";
+        case +90: return "ANGLE:  +90 (left) ";
+        default:  return "ANGLE:  ???        ";
     }
 }
-#else
-static const char *client_state_str(int s)
+
+static uint16_t angle_color(int a)
 {
-    switch (s) {
-        case 0:  return "STATE: scanning    ";
-        case 1:  return "STATE: server FOUND";
-        case 2:  return "STATE: CONNECTED   ";
-        case 3:  return "STATE: disconnected";
-        default: return "STATE: unknown     ";
+    switch (a) {
+        case -90: return BLUE;
+        case   0: return GREEN;
+        case +90: return RED;
+        default:  return WHITE;
     }
 }
-#endif
 
 static void *lcd_task(const char *arg)
 {
     unused(arg);
-
-#if WS63_ROLE == WS63_ROLE_SERVER
-    char header[] = "WS63 SLE SPEED";
-    char role[]   = "Role: SERVER";
-    uint16_t hcol = GREEN;
-#else
-    char header[] = "WS63 SLE SPEED";
-    char role[]   = "Role: CLIENT";
-    uint16_t hcol = BLUE2;
-#endif
+    char header[] = "WS63 SG90 servo";
+    char pin[]    = "Pin: GPIO_10 (PWM)";
     char counter[32];
-    char peer_line[32];
-#if WS63_ROLE == WS63_ROLE_CLIENT
-    char extra_line[32];
-#endif
+    char moves[32];
 
     spi_lcd_init();
     spi_lcd_clear(BLACK);
-    spi_lcd_display_string_line(0, 0, hcol,  BLACK, (uint8_t *)header);
-    spi_lcd_display_string_line(0, 2, WHITE, BLACK, (uint8_t *)role);
+    spi_lcd_display_string_line(0, 0, GREEN, BLACK, (uint8_t *)header);
+    spi_lcd_display_string_line(0, 1, WHITE, BLACK, (uint8_t *)pin);
 
-    int last_state = -1;
+    int last_angle = -999;
+    uint32_t last_moves = 0xFFFFFFFFu;
     uint32_t tick = 0;
 
     for (;;) {
-#if WS63_ROLE == WS63_ROLE_SERVER
-        int s = g_server_link_state;
-        if (s != last_state) {
-            last_state = s;
-            uint16_t color = (s == 1) ? GREEN : (s == 2 ? RED : WHITE);
-            spi_lcd_display_string_line(0, 3, color, BLACK,
-                                        (uint8_t *)server_state_str(s));
-            if (s == 1 || s == 2) {
-                snprintf(peer_line, sizeof(peer_line), "Peer: %s", g_server_peer_addr);
-                spi_lcd_display_string_line(0, 4, color, BLACK, (uint8_t *)peer_line);
-            }
+        int a = g_servo_angle;
+        if (a != last_angle) {
+            last_angle = a;
+            spi_lcd_display_string_line(0, 3, angle_color(a), BLACK,
+                                        (uint8_t *)angle_str(a));
         }
-#else
-        int s = g_client_link_state;
-        if (s != last_state) {
-            last_state = s;
-            uint16_t color = (s == 2) ? GREEN : (s == 3 ? RED : WHITE);
-            spi_lcd_display_string_line(0, 3, color, BLACK,
-                                        (uint8_t *)client_state_str(s));
-            if (s >= 1 && s <= 2) {
-                snprintf(peer_line, sizeof(peer_line), "Srv: %s", g_client_peer_addr);
-                spi_lcd_display_string_line(0, 4, color, BLACK, (uint8_t *)peer_line);
-            }
+        if (g_servo_moves != last_moves) {
+            last_moves = g_servo_moves;
+            snprintf(moves, sizeof(moves), "Moves: %lu    ",
+                     (unsigned long)last_moves);
+            spi_lcd_display_string_line(0, 5, WHITE, BLACK, (uint8_t *)moves);
         }
-        snprintf(extra_line, sizeof(extra_line), "RX pkts: %lu     ",
-                 (unsigned long)g_client_recv_pkts);
-        spi_lcd_display_string_line(0, 5, WHITE, BLACK, (uint8_t *)extra_line);
-#endif
+
         tick++;
         snprintf(counter, sizeof(counter), "Uptime: %lu s",
                  (unsigned long)(tick * LCD_REFRESH_MS / 1000));
@@ -122,15 +85,16 @@ static void app_entry(void)
 {
     osal_task *h;
     osal_kthread_lock();
-    h = osal_kthread_create((osal_kthread_handler)lcd_task, NULL, "LcdTask", TASK_STACK_SIZE);
-    if (h) osal_kthread_set_priority(h, LCD_TASK_PRIO);
-    osal_kthread_unlock();
 
-#if WS63_ROLE == WS63_ROLE_SERVER
-    sle_speed_server_entry();
-#else
-    sle_speed_client_entry();
-#endif
+    h = osal_kthread_create((osal_kthread_handler)lcd_task, NULL,
+                            "LcdTask", LCD_TASK_STACK_SIZE);
+    if (h) osal_kthread_set_priority(h, LCD_TASK_PRIO);
+
+    h = osal_kthread_create((osal_kthread_handler)servo_task, NULL,
+                            "ServoTask", SERVO_TASK_STACK_SIZE);
+    if (h) osal_kthread_set_priority(h, SERVO_TASK_PRIO);
+
+    osal_kthread_unlock();
 }
 
 app_run(app_entry);

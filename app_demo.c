@@ -36,7 +36,9 @@
 
 /* Shared status. */
 volatile int g_nfc_state = 0;      /* 0=init, 1=ready, 10=init fail */
-volatile uint32_t g_nfc_hits = 0;
+volatile uint32_t g_nfc_hits  = 0;
+volatile uint32_t g_nfc_polls = 0;   /* total polls since READY */
+volatile int      g_nfc_last_rc = -999; /* last pn532_read_card_uid rc */
 static char g_uid_str[40] = "(none)";
 static char g_fw_str[20]  = "(?)";
 
@@ -86,23 +88,37 @@ static void *nfc_task(const char *arg)
     uint8_t uid_len = 0;
     char    last_uid[40] = "";
 
+    uint32_t since_last_log = 0;
     for (;;) {
         int rc = pn532_read_card_uid(uid, &uid_len);
+        g_nfc_polls++;
+        g_nfc_last_rc = rc;
+
         if (rc == 0 && uid_len > 0) {
             char hex[40];
             uid_to_hex(uid, uid_len, hex, sizeof(hex));
             if (strcmp(hex, last_uid) != 0) {
-                /* New card detected. */
                 strncpy(last_uid, hex, sizeof(last_uid) - 1);
                 snprintf(g_uid_str, sizeof(g_uid_str), "%s", hex);
                 g_nfc_hits++;
-                osal_printk("[nfc] card UID (%u bytes): %s\r\n", uid_len, hex);
+                /* big banner so you can't miss it in serial */
+                osal_printk("\r\n>>>>>>>>>> CARD DETECTED  UID(%u) = %s <<<<<<<<<<\r\n",
+                            uid_len, hex);
             }
         } else {
-            /* No card present — reset last UID so re-presenting the same card
-             * counts again. */
             last_uid[0] = '\0';
         }
+
+        /* Periodic heartbeat so you know the loop is alive. */
+        since_last_log += NFC_POLL_INTERVAL_MS;
+        if (since_last_log >= 3000) {
+            since_last_log = 0;
+            osal_printk("[nfc] polls=%lu hits=%lu last_rc=%d\r\n",
+                        (unsigned long)g_nfc_polls,
+                        (unsigned long)g_nfc_hits,
+                        g_nfc_last_rc);
+        }
+
         osal_msleep(NFC_POLL_INTERVAL_MS);
     }
     return NULL;
@@ -121,9 +137,11 @@ static void *lcd_task(const char *arg)
 
     int last_state = -1;
     uint32_t last_hits = 0xFFFFFFFFu;
+    uint32_t last_polls = 0xFFFFFFFFu;
     char counter[32];
     char uid_line[40];
     char hits_line[24];
+    char poll_line[32];
 
     uint32_t tick = 0;
     for (;;) {
@@ -146,6 +164,14 @@ static void *lcd_task(const char *arg)
             snprintf(hits_line, sizeof(hits_line), "Hits: %lu       ",
                      (unsigned long)last_hits);
             spi_lcd_display_string_line(0, 6, GREEN, BLACK, (uint8_t *)hits_line);
+        }
+        /* Show poll counter + last rc so we know NFC task is alive. */
+        if (g_nfc_polls != last_polls) {
+            last_polls = g_nfc_polls;
+            snprintf(poll_line, sizeof(poll_line),
+                     "Polls:%lu rc=%d   ",
+                     (unsigned long)last_polls, g_nfc_last_rc);
+            spi_lcd_display_string_line(0, 9, WHITE, BLACK, (uint8_t *)poll_line);
         }
 
         tick++;

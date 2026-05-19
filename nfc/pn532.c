@@ -192,9 +192,24 @@ static int pn532_exchange(const uint8_t *cmd, uint8_t cmd_len,
 
 /* ── public API ────────────────────────────────────────────────────────── */
 
+/* PN532 LongPreamble wakeup — many modules need this on UART after power-up
+ * to leave LowVbat/PowerDown mode before they answer commands. */
+static void pn532_wakeup(void)
+{
+    /* 0x55 0x55 0x00 ... then a fresh SAMConfiguration frame */
+    static const uint8_t wakeup[] = {
+        0x55, 0x55,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    };
+    uart_send(wakeup, sizeof(wakeup));
+    osal_msleep(20);
+}
+
 int pn532_init(void)
 {
-    /* Pin mux: GPIO_26 → UART1 TX, GPIO_27 → UART1 RX */
+    osal_printk("[pn532] init step 1: pin mux (TX=GPIO_%d RX=GPIO_%d mode=%d)\r\n",
+                UART_TX_PIN, UART_RX_PIN, UART_PIN_MODE);
     uapi_pin_set_mode(UART_TX_PIN, UART_PIN_MODE);
     uapi_pin_set_mode(UART_RX_PIN, UART_PIN_MODE);
 
@@ -211,23 +226,35 @@ int pn532_init(void)
         .rts_pin = PIN_NONE,
     };
 
+    osal_printk("[pn532] init step 2: uart_init bus=%d @%d\r\n", UART_BUS, UART_BAUD);
     uapi_uart_deinit(UART_BUS);
     if (uapi_uart_init(UART_BUS, &pin_config, &attr, NULL,
                        (uart_buffer_config_t *)&g_uart_buf_cfg) != ERRCODE_SUCC) {
         osal_printk("[pn532] uapi_uart_init fail\r\n");
         return -1;
     }
-    osal_msleep(50);  /* let PN532 settle */
+    osal_msleep(100);  /* let PN532 settle */
 
-    /* SAMConfiguration: normal mode, timeout 20*50ms=1s, no IRQ */
+    osal_printk("[pn532] init step 3: wakeup burst + SAMConfiguration retries\r\n");
+
+    /* SAMConfiguration: normal mode, timeout 20*50ms=1s, no IRQ.
+     * Retry up to 5 times — first SAMConfiguration after power-up often
+     * fails because PN532 was asleep; wakeup byte burst is sent every try. */
     uint8_t sam[] = {PN532_CMD_SAMCONFIG, 0x01, 0x14, 0x01};
     uint8_t resp[8];
-    int rc = pn532_exchange(sam, sizeof(sam), resp, sizeof(resp), IO_TIMEOUT_MS);
+    int rc = -1;
+    for (int attempt = 1; attempt <= 5; attempt++) {
+        pn532_wakeup();
+        rc = pn532_exchange(sam, sizeof(sam), resp, sizeof(resp), IO_TIMEOUT_MS);
+        osal_printk("[pn532] SAMConfiguration attempt %d rc=%d\r\n", attempt, rc);
+        if (rc >= 0) break;
+        osal_msleep(200);
+    }
     if (rc < 0) {
-        osal_printk("[pn532] SAMConfiguration failed rc=%d\r\n", rc);
+        osal_printk("[pn532] SAMConfiguration failed after retries\r\n");
         return -2;
     }
-    osal_printk("[pn532] SAMConfiguration ok\r\n");
+    osal_printk("[pn532] SAMConfiguration OK\r\n");
     return 0;
 }
 

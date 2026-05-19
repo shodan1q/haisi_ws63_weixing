@@ -169,11 +169,22 @@ static int pn532_recv_frame(uint8_t *out_data, int out_max, int timeout_ms)
     return payload_len;
 }
 
+/* Drain any stale bytes in the RX buffer with a 1 ms timeout per chunk,
+ * up to ~32 bytes. We don't use uapi_uart_flush_rx_data because that
+ * symbol isn't compiled into the WS63 SDK we have. */
+static void pn532_drain_rx(void)
+{
+    uint8_t junk[8];
+    for (int i = 0; i < 4; i++) {
+        if (uart_recv(junk, sizeof(junk), 1) <= 0) break;
+    }
+}
+
 /* Send a command, wait ACK, read response. */
 static int pn532_exchange(const uint8_t *cmd, uint8_t cmd_len,
                           uint8_t *resp, int resp_max, int resp_timeout_ms)
 {
-    uapi_uart_flush_rx_data(UART_BUS);
+    pn532_drain_rx();
     if (pn532_send_frame(cmd, cmd_len) != 0) return -100;
     if (pn532_wait_ack(IO_TIMEOUT_MS) != 0) return -101;
     return pn532_recv_frame(resp, resp_max, resp_timeout_ms);

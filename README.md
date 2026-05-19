@@ -1,107 +1,140 @@
-# haisi_ws63_weixing · SG90 servo demo
+# haisi_ws63_weixing · PN532 NFC test (branch nfc-5321)
 
-WS63 个人开发分仓 —— 当前内容是 **SG90 舵机控制 demo**（GPIO_10 软件模拟 50Hz PWM）。
+PN532 / PN5321 NFC 模块 over **UART1**（GPIO_26 TX / GPIO_27 RX，115200 8N1）的读卡测试。
+LCD 实时显示 PN532 状态、固件版本、最近一张卡的 UID、累计读卡数。
 
 挂载点 `src/application/samples/custom/`，SDK 源码零修改。
 
 ---
 
-## 当前 demo 做什么
-
-启动后舵机循环以下动作（一圈约 3.2 秒）：
-1. **居中 0°**  (1500 µs 脉宽)
-2. **左转 +90°** (2500 µs 脉宽) 🔴
-3. **居中 0°**
-4. **右转 -90°** (500 µs 脉宽) 🔵
-
-LCD 显示：
-- 顶行 `WS63 SG90 servo`
-- `Pin: GPIO_10 (PWM)`
-- `ANGLE: ±90 / 0 (left/right/center)` 实时跟随舵机当前角度，颜色变化
-- `Moves: N` 累计执行次数
-- `Uptime: N s`
-
-## 为什么是软件 PWM 不是硬件 PWM
-
-舵机要求 **50 Hz（20 ms 周期）**，WS63 硬件 PWM 最低频率比这个高，达不到。所以照 HiHope 官方做法 **GPIO bit-bang**：用 `uapi_systick_delay_us` 拉高 N µs 再拉低 (20000-N) µs。
-
-不优雅但有效，CPU 占用约 1%（每秒只发约 50 个 20ms 周期，发的时候才阻塞）。
-
----
-
 ## 接线
 
-| SG90 引脚 | 接 | 说明 |
-|---|---|---|
-| **橙色（信号）** | 板上 GPIO_10 | 50Hz PWM 信号 |
-| **红色（VCC）** | 板上 5V | 舵机供电（**注意：5V，不是 3.3V，否则没力**） |
-| **棕色（GND）** | 板上 GND | 地 |
+| PN532 引脚 | 接板子上 |
+|---|---|
+| **TXD** | GPIO_27 (UART1_RX) |
+| **RXD** | GPIO_26 (UART1_TX) |
+| **VCC** | 3.3V 或 5V（看你模块是否支持 5V）|
+| **GND** | GND |
 
-⚠️ **重要**：
-- SG90 电流峰值 ~250mA，板载稳压能否给够要看你板子，最稳妥是用外部 5V 电源 + 共地
-- GPIO_10 在 4T_HRM_QS2 板上原本接 LED1 红灯，如果板子焊死了 LED 在那一脚，你会看到 LED 随着舵机控制信号亮一下亮一下——属于正常副作用
+⚠️ **必须**：PN532 模块上有 `SET0/SET1` 跳线/拨码，**全置 0 = UART 模式**。如果默认是 I2C 或 SPI 不会响应。
+
+板上 UART0（USB 转串口）保持原样，HiSpark Studio 串口监视器仍能看到 `[nfc]` / `[pn532]` 调试日志。
 
 ---
 
-## Windows 上怎么编
+## 切到这个分支编
 
 ```powershell
 cd D:\fbb_ws63-master\src\application\samples\custom
-git pull
-git log --oneline -1
-# 应该是最新的 servo demo commit
 
-# HiSpark Studio:
-#   Kconfig → Application → ✓ Enable Sample → Save
-#   Clean → Build → 烧录 → 复位
+# 切到 NFC 分支（如果第一次拉这个分支）
+git fetch
+git checkout -b nfc-5321 origin/nfc-5321
+# 或者已经在本地：
+# git checkout nfc-5321 && git pull
+
+# HiSpark Studio: Clean → Build → 烧录 → 复位
 ```
 
 ---
 
-## 文件清单
+## 预期行为
+
+复位后约 1 秒：
+
+**LCD**:
+```
+WS63 PN532 NFC          (绿色标题)
+UART1 GPIO_26/27
+                        
+PN532: READY            (绿)
+FW: 32 v1.6             (PN532 通常返回 IC=0x32 v1.6)
+UID: 04 A1 B2 C3 ...    (刷一张卡这一行就显示其 UID)
+Hits: 0, 1, 2...        (每识别一张新卡 +1)
+Uptime: N s
+```
+
+**串口** (UART0 / USB)：
+```
+[pn532] SAMConfiguration ok
+[nfc] firmware: IC=32 Ver=1 Rev=6 Support=07
+[nfc] card UID (4 bytes): 04 A1 B2 C3
+```
+
+---
+
+## 排错
+
+| 现象 | 含义 |
+|---|---|
+| LCD `PN532 INIT FAILED` 红 | UART 没握上手。检查 RX/TX 是不是接反了、PN532 跳线模式、电源 |
+| LCD `PN532: READY` 但 UID 永远 `(none)` | 通讯正常但探测不到卡。模块天线没接好 / 卡型号不支持（PN532 主要支持 ISO14443-A，Mifare/NTAG）|
+| LCD `PN532 INIT FAILED` + 串口看到 `pn532_init failed` 但没有 SAMConfiguration log | UART 初始化都没成功，可能 GPIO mode 选错 |
+| 串口里 `SAMConfiguration failed rc=-101` | 收到了响应但不是合法 ACK，可能波特率不对 |
+
+`-rc` 错误码解读（在 `nfc/pn532.c`）：
+- `-100`：发送失败
+- `-101`：ACK 等待超时或不匹配（最常见的"接线问题"信号）
+- `-1..-9`：响应帧解析各步骤错误
+
+---
+
+## API
+
+`nfc/pn532.h` 公开：
+
+```c
+int pn532_init(void);
+int pn532_get_firmware_version(uint8_t out[4]);
+
+int pn532_read_card_uid(uint8_t uid[10], uint8_t *uid_len);
+
+int pn532_mifare_read_block(uint8_t key_type, const uint8_t key[6],
+                            const uint8_t *uid, uint8_t uid_len,
+                            uint8_t block, uint8_t out[16]);
+
+int pn532_mifare_write_block(uint8_t key_type, const uint8_t key[6],
+                             const uint8_t *uid, uint8_t uid_len,
+                             uint8_t block, const uint8_t data[16]);
+```
+
+写卡示例（写 block 4 = sector 1 block 0）：
+```c
+uint8_t key_a[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};   // 出厂默认 KeyA
+uint8_t payload[16] = {'H', 'i', '!', 0};                  // 16 字节，剩余补 0
+pn532_mifare_write_block(0x60, key_a, uid, uid_len, 4, payload);
+```
+
+读回：
+```c
+uint8_t buf[16];
+pn532_mifare_read_block(0x60, key_a, uid, uid_len, 4, buf);
+// buf 现在是 'H' 'i' '!' 0x00 ... ...
+```
+
+⚠️ **不要写 sector trailer**（block 3、7、11、…即 `(n*4)+3`）除非你确定 Key A/B + access bits 格式，否则该 sector 永久变砖。
+
+---
+
+## 分支总览
+
+| 分支 | 内容 |
+|---|---|
+| `main` | SG90 舵机平滑扫描 demo（GPIO_10） |
+| `sle-speed-backup` | 两板 SLE 通信（sle_speed_server + client） |
+| **`nfc-5321`** | 当前分支：PN532 NFC 读卡 |
+
+---
+
+## 文件清单（本分支）
 
 | 文件 | 说明 |
 |---|---|
-| `app_demo.c` | 主入口，启动 LCD + servo 任务 |
-| `servo/sg90_control.c` | 软件 PWM 实现（GPIO bit-bang） |
-| `servo/sg90_control.h` | 暴露入口 + 全局状态 |
-| `lcd.c` / `lcd.h` / `fonts.c` / `fonts.h` | ILI9341 LCD 驱动（板厂原版） |
+| `app_demo.c` | 主入口，启动 LCD + NFC 任务 |
+| `nfc/pn532.c` | PN532 UART 驱动 + 命令封装 |
+| `nfc/pn532.h` | 公开 API |
+| `lcd.c` / `lcd.h` / `fonts.c` / `fonts.h` | ILI9341 LCD 驱动 |
 | `CMakeLists.txt` | 编译清单 |
-
----
-
-## 想改什么
-
-| 想改 | 改这里 |
-|---|---|
-| 切换不同角度（如转 45°） | `sg90_control.c` 顶部 `US_FOR_*` 宏，1500 居中，每变 1µs 约 0.09° |
-| 改成连续旋转 360° | SG90 是位置舵机，硬件不支持；要换成 MG996R 连续旋转版 |
-| 减速 / 加速过渡 | 把 `servo_move_to` 改成发送一系列渐变的 high_us 值 |
-| 不要循环，停在某个角度 | 在 `servo_task()` 的 `for(;;)` 里只 call 一次然后 sleep 长时间 |
-| 用按键控制角度 | 之前 LCD+LED+ADC 按键的版本在 git history `f9266cd` commit |
-
----
-
-## 历史代码
-
-| 想找什么 | 在哪 |
-|---|---|
-| **两板 SLE 双向通信**（sle_speed_server + client） | 分支 `sle-speed-backup`，commit `8af5048` 之前的 main |
-| LCD + LED + 蜂鸣器 + ADC 按键综合 demo | main 分支 commit `f9266cd` |
-| SLE 配网 + HarmonyOS App | 分支 `sle-speed-backup` 之前的 `harmony_app/` 目录（或 commit `dad6991`） |
-| LCD 单显示 demo | commit `163d756` |
-
-切回任意旧版本（**不要**这么做除非你想改回去）：
-```powershell
-git checkout <commit-hash>      # 临时切去查看
-git checkout main               # 切回主线
-```
-
-要把 sle-speed-backup 分支拉到本地：
-```powershell
-git fetch origin sle-speed-backup
-git checkout sle-speed-backup
-```
 
 ---
 
@@ -109,4 +142,4 @@ git checkout sle-speed-backup
 
 - WS63 SDK 上游：https://gitee.com/HiSpark/fbb_ws63
 - 完整 SDK 镜像：https://github.com/shodan1q/haisi_ws63
-- SG90 demo 参考自：`vendor/HiHope_NearLink_DK_WS63E_V03/demo/servo/sg92r_control.c`
+- PN532 协议参考：NXP UM0701-02 (PN532 User Manual)

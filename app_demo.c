@@ -1,66 +1,151 @@
 /*
- * 4T_HRM_QS2 (Hi3863 / WS63) SG90 servo demo
+ * 4T_HRM_QS2 (Hi3863 / WS63) PN532 NFC test
  *
- * Spins up two tasks:
- *   - servo_task : bit-bangs 50 Hz PWM on GPIO_10 to drive the servo
- *                  (HiHope-style, the WS63 HW PWM can't reach 50 Hz)
- *   - lcd_task   : shows the current commanded angle + move counter
+ * Wires:
+ *   PN532  TXD --- GPIO_27 (board UART1 RX)
+ *   PN532  RXD --- GPIO_26 (board UART1 TX)
+ *   PN532  VCC --- 3.3V or 5V (check your module's jumpers)
+ *   PN532  GND --- GND
+ *
+ * Make sure your PN532 module is jumpered for UART mode (most have a SET0/
+ * SET1 pair: UART = SET0=0, SET1=0; default of most boards).
+ *
+ * What this demo does:
+ *   1. Initialize PN532 (SAMConfiguration)
+ *   2. Print firmware version to serial
+ *   3. Poll for ISO14443-A cards every ~300 ms
+ *   4. On hit: show UID hex on LCD, increment counter
+ *   5. (optional) Mifare read/write available via pn532.h API
  */
 
 #include <stdio.h>
+#include <string.h>
 #include "common_def.h"
 #include "soc_osal.h"
 #include "app_init.h"
 #include "lcd.h"
 
-#include "servo/sg90_control.h"
+#include "nfc/pn532.h"
 
-#define LCD_TASK_STACK_SIZE      0x1000
-#define SERVO_TASK_STACK_SIZE    0x1000
-#define LCD_TASK_PRIO            26
-#define SERVO_TASK_PRIO          17
-#define LCD_REFRESH_MS           200
+#define LCD_TASK_STACK_SIZE   0x1000
+#define NFC_TASK_STACK_SIZE   0x1000
+#define LCD_TASK_PRIO         26
+#define NFC_TASK_PRIO         22
+#define LCD_REFRESH_MS        200
+#define NFC_POLL_INTERVAL_MS  300
 
-static uint16_t angle_color(int a)
+/* Shared status. */
+volatile int g_nfc_state = 0;      /* 0=init, 1=ready, 10=init fail */
+volatile uint32_t g_nfc_hits = 0;
+static char g_uid_str[40] = "(none)";
+static char g_fw_str[20]  = "(?)";
+
+static const char *nfc_state_str(int s)
 {
-    if (a >=  60) return RED;     /* near +90 */
-    if (a <= -60) return BLUE;    /* near -90 */
-    if (a >= -10 && a <= 10) return GREEN;   /* near center */
-    return WHITE;                  /* mid-sweep */
+    switch (s) {
+        case 0:  return "PN532: initializing";
+        case 1:  return "PN532: READY       ";
+        case 10: return "PN532 INIT FAILED  ";
+        default: return "PN532: ???         ";
+    }
+}
+
+static void uid_to_hex(const uint8_t *uid, uint8_t len, char *out, int out_sz)
+{
+    int written = 0;
+    for (uint8_t i = 0; i < len && written + 4 < out_sz; i++) {
+        written += snprintf(out + written, out_sz - written, "%02X ", uid[i]);
+    }
+    if (written > 0) out[written - 1] = '\0';   /* drop trailing space */
+}
+
+static void *nfc_task(const char *arg)
+{
+    unused(arg);
+    osal_msleep(500);  /* let LCD task draw the header first */
+
+    if (pn532_init() != 0) {
+        osal_printk("[nfc] pn532_init failed\r\n");
+        g_nfc_state = 10;
+        return NULL;
+    }
+
+    uint8_t fw[4];
+    if (pn532_get_firmware_version(fw) == 0) {
+        osal_printk("[nfc] firmware: IC=%02X Ver=%d.%d Support=%02X\r\n",
+                    fw[0], fw[1], fw[2], fw[3]);
+        snprintf(g_fw_str, sizeof(g_fw_str), "FW: %02X v%d.%d",
+                 fw[0], fw[1], fw[2]);
+    } else {
+        snprintf(g_fw_str, sizeof(g_fw_str), "FW: unknown");
+    }
+
+    g_nfc_state = 1;
+
+    uint8_t uid[PN532_MAX_UID_LEN];
+    uint8_t uid_len = 0;
+    char    last_uid[40] = "";
+
+    for (;;) {
+        int rc = pn532_read_card_uid(uid, &uid_len);
+        if (rc == 0 && uid_len > 0) {
+            char hex[40];
+            uid_to_hex(uid, uid_len, hex, sizeof(hex));
+            if (strcmp(hex, last_uid) != 0) {
+                /* New card detected. */
+                strncpy(last_uid, hex, sizeof(last_uid) - 1);
+                snprintf(g_uid_str, sizeof(g_uid_str), "%s", hex);
+                g_nfc_hits++;
+                osal_printk("[nfc] card UID (%u bytes): %s\r\n", uid_len, hex);
+            }
+        } else {
+            /* No card present — reset last UID so re-presenting the same card
+             * counts again. */
+            last_uid[0] = '\0';
+        }
+        osal_msleep(NFC_POLL_INTERVAL_MS);
+    }
+    return NULL;
 }
 
 static void *lcd_task(const char *arg)
 {
     unused(arg);
-    char header[] = "WS63 SG90 servo";
-    char pin[]    = "Pin: GPIO_10 (PWM)";
-    char counter[32];
-    char moves[32];
-    char angle_line[32];
 
     spi_lcd_init();
     spi_lcd_clear(BLACK);
+    char header[] = "WS63 PN532 NFC";
+    char pins[]   = "UART1 GPIO_26/27";
     spi_lcd_display_string_line(0, 0, GREEN, BLACK, (uint8_t *)header);
-    spi_lcd_display_string_line(0, 1, WHITE, BLACK, (uint8_t *)pin);
+    spi_lcd_display_string_line(0, 1, WHITE, BLACK, (uint8_t *)pins);
 
-    int last_angle = -999;
-    uint32_t last_moves = 0xFFFFFFFFu;
+    int last_state = -1;
+    uint32_t last_hits = 0xFFFFFFFFu;
+    char counter[32];
+    char uid_line[40];
+    char hits_line[24];
+
     uint32_t tick = 0;
-
     for (;;) {
-        int a = g_servo_angle;
-        if (a != last_angle) {
-            last_angle = a;
-            /* extra trailing spaces wipe leftover digits when shrinking */
-            snprintf(angle_line, sizeof(angle_line), "ANGLE: %+4d deg    ", a);
-            spi_lcd_display_string_line(0, 3, angle_color(a), BLACK,
-                                        (uint8_t *)angle_line);
+        int s = g_nfc_state;
+        if (s != last_state) {
+            last_state = s;
+            uint16_t color = (s == 1) ? GREEN : (s == 10 ? RED : WHITE);
+            spi_lcd_display_string_line(0, 3, color, BLACK,
+                                        (uint8_t *)nfc_state_str(s));
+            if (s == 1) {
+                spi_lcd_display_string_line(0, 4, WHITE, BLACK, (uint8_t *)g_fw_str);
+            }
         }
-        if (g_servo_moves != last_moves) {
-            last_moves = g_servo_moves;
-            snprintf(moves, sizeof(moves), "Moves: %lu    ",
-                     (unsigned long)last_moves);
-            spi_lcd_display_string_line(0, 5, WHITE, BLACK, (uint8_t *)moves);
+
+        /* Live UID and counter. */
+        snprintf(uid_line, sizeof(uid_line), "UID: %s         ", g_uid_str);
+        spi_lcd_display_string_line(0, 5, WHITE, BLACK, (uint8_t *)uid_line);
+        if (g_nfc_hits != last_hits) {
+            last_hits = g_nfc_hits;
+            snprintf(hits_line, sizeof(hits_line), "Hits: %lu       ",
+                     (unsigned long)last_hits);
+            spi_lcd_display_string_line(0, 6, GREEN, BLACK, (uint8_t *)hits_line);
         }
 
         tick++;
@@ -81,9 +166,9 @@ static void app_entry(void)
                             "LcdTask", LCD_TASK_STACK_SIZE);
     if (h) osal_kthread_set_priority(h, LCD_TASK_PRIO);
 
-    h = osal_kthread_create((osal_kthread_handler)servo_task, NULL,
-                            "ServoTask", SERVO_TASK_STACK_SIZE);
-    if (h) osal_kthread_set_priority(h, SERVO_TASK_PRIO);
+    h = osal_kthread_create((osal_kthread_handler)nfc_task, NULL,
+                            "NfcTask", NFC_TASK_STACK_SIZE);
+    if (h) osal_kthread_set_priority(h, NFC_TASK_PRIO);
 
     osal_kthread_unlock();
 }

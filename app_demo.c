@@ -21,24 +21,12 @@
 #define SERVO_TASK_PRIO          17
 #define LCD_REFRESH_MS           200
 
-static const char *angle_str(int a)
-{
-    switch (a) {
-        case -90: return "ANGLE:  -90 (right)";
-        case   0: return "ANGLE:    0 (center)";
-        case +90: return "ANGLE:  +90 (left) ";
-        default:  return "ANGLE:  ???        ";
-    }
-}
-
 static uint16_t angle_color(int a)
 {
-    switch (a) {
-        case -90: return BLUE;
-        case   0: return GREEN;
-        case +90: return RED;
-        default:  return WHITE;
-    }
+    if (a >=  60) return RED;     /* near +90 */
+    if (a <= -60) return BLUE;    /* near -90 */
+    if (a >= -10 && a <= 10) return GREEN;   /* near center */
+    return WHITE;                  /* mid-sweep */
 }
 
 static void *lcd_task(const char *arg)
@@ -48,6 +36,7 @@ static void *lcd_task(const char *arg)
     char pin[]    = "Pin: GPIO_10 (PWM)";
     char counter[32];
     char moves[32];
+    char angle_line[32];
 
     spi_lcd_init();
     spi_lcd_clear(BLACK);
@@ -62,8 +51,10 @@ static void *lcd_task(const char *arg)
         int a = g_servo_angle;
         if (a != last_angle) {
             last_angle = a;
+            /* extra trailing spaces wipe leftover digits when shrinking */
+            snprintf(angle_line, sizeof(angle_line), "ANGLE: %+4d deg    ", a);
             spi_lcd_display_string_line(0, 3, angle_color(a), BLACK,
-                                        (uint8_t *)angle_str(a));
+                                        (uint8_t *)angle_line);
         }
         if (g_servo_moves != last_moves) {
             last_moves = g_servo_moves;

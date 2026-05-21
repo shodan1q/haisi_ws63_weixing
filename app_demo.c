@@ -2,7 +2,7 @@
  * 4T_HRM_QS2 (Hi3863 / WS63) T/H/P sensor transmitter
  *
  * Sensors:
- *   SHT30   (I2C 0x44) on bit-bang bus  — SDA=GPIO_11, SCL=GPIO_12
+ *   SHT30   (I2C 0x44) on bit-bang bus  — SDA=GPIO_7,  SCL=GPIO_8
  *   BMP280  (I2C 0x76) on the same bus  — same SDA/SCL
  *   TM1640  (2-wire serial, NOT i2c)    — DIN=GPIO_13, CLK=GPIO_14
  *
@@ -28,8 +28,8 @@
 #include "sensors/tm1640.h"
 
 /* ---- wiring ---- */
-#define SENSOR_BUS_SDA   11
-#define SENSOR_BUS_SCL   12
+#define SENSOR_BUS_SDA    7
+#define SENSOR_BUS_SCL    8
 #define TM1640_DATA_PIN  13
 #define TM1640_CLK_PIN   14
 
@@ -122,19 +122,24 @@ static void *sensor_task(const char *arg)
             g_bmp_err++;
         }
 
-        /* TM1640 — alternate every 2 s between temp and humidity */
-        if ((loop / 2) & 1) {
-            int whole = (int)g_humid_p;
-            int frac  = (int)((g_humid_p - whole) * 10);
-            if (frac < 0) frac = 0;
-            snprintf(dispbuf, sizeof(dispbuf), "%2d.%dH", whole, frac);
-        } else {
-            int whole = (int)g_temp_c;
-            int frac  = (int)((g_temp_c - whole) * 10);
-            if (frac < 0) frac = -frac;
-            snprintf(dispbuf, sizeof(dispbuf), "%2d.%dC", whole, frac);
+        /* TM1640 — show both at once in 7-digit "TT.T HH.H" form.
+         * ESP32 reference used pattern like "520.1314" (7 digits, 1 dp);
+         * we use 7 digits with 2 decimal points: temperature on the left,
+         * a single blank digit in the middle, humidity on the right. */
+        {
+            int t_int  = (int)g_temp_c;
+            int t_frac = (int)((g_temp_c - t_int) * 10);
+            if (t_frac < 0) t_frac = -t_frac;
+            int h_int  = (int)g_humid_p;
+            int h_frac = (int)((g_humid_p - h_int) * 10);
+            if (h_frac < 0) h_frac = 0;
+            /* "%2d.%d %2d.%d" expands to e.g. "25.6 65.3" — 9 ASCII chars
+             * which the tm1640_show_text helper collapses to 7 digit
+             * positions (each '.' is OR-ed into the digit to its left). */
+            snprintf(dispbuf, sizeof(dispbuf), "%2d.%d %2d.%d",
+                     t_int, t_frac, h_int, h_frac);
+            tm1640_show_text(&g_tm1640, dispbuf);
         }
-        tm1640_show_text(&g_tm1640, dispbuf);
 
         osal_printk("[loop %lu] sht30 rc=%d T=%d.%d H=%d.%d  "
                     "bmp rc=%d P=%d.%d  ok=S%lu/B%lu err=S%lu/B%lu  show=\"%s\"\r\n",
@@ -157,9 +162,11 @@ static void *lcd_task(const char *arg)
 {
     unused(arg);
     char hdr[]  = "WS63 T/H/P sensor";
+    char pins[] = "SDA7/SCL8 Tube14/13";
     spi_lcd_init();
     spi_lcd_clear(BLACK);
     spi_lcd_display_string_line(0, 0, GREEN, BLACK, (uint8_t *)hdr);
+    spi_lcd_display_string_line(0, 1, WHITE, BLACK, (uint8_t *)pins);
 
     char tline[40], hline[40], pline[40], stat[40];
     for (;;) {

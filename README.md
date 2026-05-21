@@ -1,60 +1,131 @@
-# haisi_ws63_weixing · SG90 servo demo
+# haisi_ws63_weixing · 温湿度变送器（branch temp-humid-sensor）
 
-WS63 个人开发分仓 —— 当前内容是 **SG90 舵机控制 demo**（GPIO_10 软件模拟 50Hz PWM）。
+WS63 SDK 个人开发分仓 —— **温湿度 + 气压变送器**。
+
+| 模块 | 总线 / 引脚 | 用途 |
+|---|---|---|
+| **SHT30** | I2C 0x44，软件 I2C，SDA=GPIO_11 / SCL=GPIO_12 | 温度 + 相对湿度 |
+| **BMP280** | I2C 0x76，**和 SHT30 共用同一条总线** | 温度 + 大气压 |
+| **TM1640** 7 段数码管 | 2 线串行，DIN=GPIO_13 / CLK=GPIO_3 | 显示温度/湿度（每 2 秒交替） |
+| LCD | 已有 SPI 接口 | 完整状态 + 各传感器 ok/err 计数 |
 
 挂载点 `src/application/samples/custom/`，SDK 源码零修改。
 
 ---
 
-## 当前 demo 做什么
-
-启动后舵机循环以下动作（一圈约 3.2 秒）：
-1. **居中 0°**  (1500 µs 脉宽)
-2. **左转 +90°** (2500 µs 脉宽) 🔴
-3. **居中 0°**
-4. **右转 -90°** (500 µs 脉宽) 🔵
-
-LCD 显示：
-- 顶行 `WS63 SG90 servo`
-- `Pin: GPIO_10 (PWM)`
-- `ANGLE: ±90 / 0 (left/right/center)` 实时跟随舵机当前角度，颜色变化
-- `Moves: N` 累计执行次数
-- `Uptime: N s`
-
-## 为什么是软件 PWM 不是硬件 PWM
-
-舵机要求 **50 Hz（20 ms 周期）**，WS63 硬件 PWM 最低频率比这个高，达不到。所以照 HiHope 官方做法 **GPIO bit-bang**：用 `uapi_systick_delay_us` 拉高 N µs 再拉低 (20000-N) µs。
-
-不优雅但有效，CPU 占用约 1%（每秒只发约 50 个 20ms 周期，发的时候才阻塞）。
-
----
-
 ## 接线
 
-| SG90 引脚 | 接 | 说明 |
-|---|---|---|
-| **橙色（信号）** | 板上 GPIO_10 | 50Hz PWM 信号 |
-| **红色（VCC）** | 板上 5V | 舵机供电（**注意：5V，不是 3.3V，否则没力**） |
-| **棕色（GND）** | 板上 GND | 地 |
+### SHT30 + BMP280（共享一条 I2C 总线）
 
-⚠️ **重要**：
-- SG90 电流峰值 ~250mA，板载稳压能否给够要看你板子，最稳妥是用外部 5V 电源 + 共地
-- GPIO_10 在 4T_HRM_QS2 板上原本接 LED1 红灯，如果板子焊死了 LED 在那一脚，你会看到 LED 随着舵机控制信号亮一下亮一下——属于正常副作用
+| 信号 | 接板上 |
+|---|---|
+| SDA | **GPIO_11** |
+| SCL | **GPIO_12** |
+| VCC | 3.3V |
+| GND | GND |
+
+两片传感器**并联在同一对线上**（I2C 是共享总线），3.3V 和 GND 直连。各传感器小板上通常已经焊好 4.7k–10k 上拉到 VCC，**不要再外接**。
+
+### TM1640 7 段数码管
+
+| 信号 | 接板上 |
+|---|---|
+| DIN | **GPIO_13** |
+| CLK | **GPIO_3** |
+| VCC | 5V（多数 TM1640 数码管要 5V，看你模块标的） |
+| GND | GND |
+
+⚠️ **TM1640 不是 I2C**，它是自有 2 线协议（无 ACK、LSB first），只能 bit-bang，不能挂任何 I2C 设备。
 
 ---
 
-## Windows 上怎么编
+## Windows 切到本分支并编
 
 ```powershell
 cd D:\fbb_ws63-master\src\application\samples\custom
-git pull
-git log --oneline -1
-# 应该是最新的 servo demo commit
 
-# HiSpark Studio:
-#   Kconfig → Application → ✓ Enable Sample → Save
-#   Clean → Build → 烧录 → 复位
+git fetch
+git checkout -b temp-humid-sensor origin/temp-humid-sensor
+
+# HiSpark Studio: Clean → Build → 烧录 → 复位
 ```
+
+---
+
+## 预期运行效果
+
+**LCD**：
+```
+WS63 T/H/P sensor
+Bus1 SDA11/SCL12
+Tube DAT13/CLK3
+                       
+Temp:   25.6 C         (绿)
+Humid:  65.3 %         (绿)
+Press: 1013.2 hPa      (白)
+                       
+ok S:N B:N err S:N B:N (各传感器累计成功/失败次数)
+Uptime: N s
+```
+
+**数码管**（每 2 秒交替）：
+- 偶数秒：`25.6 C ` （温度）
+- 奇数秒：`65.3 H ` （湿度，H 代表 Humidity）
+
+**串口** (UART0 / USB)：
+```
+[sensor] bmp280_init rc=0
+[sensor] T=25.6 C  RH=65.3 %  P=1013.2 hPa  (sht30_ok=1 err=0, bmp_ok=1 err=0)
+[sensor] T=25.6 C  RH=65.4 %  P=1013.2 hPa  (sht30_ok=2 err=0, bmp_ok=2 err=0)
+...
+```
+
+---
+
+## 排错速查
+
+| 现象 | 含义 / 处理 |
+|---|---|
+| LCD `Temp: 0.0 C` 不变，`err S:N` 一直涨 | SHT30 没响应：检查接线、3.3V 通不通 |
+| LCD 温度正常但 `Press: 0.0 hPa`、`err B:N` 涨 | BMP280 没响应：是否焊接好、是否真的是 0x76 地址（有些模组是 0x77） |
+| 串口 `bmp280_init rc=-2` | 收到了 chip ID 但不是 0x58，可能是 BMP180 而不是 BMP280 |
+| 串口 `bmp280_init rc=-1` | I2C 完全没通，看 SDA/SCL 接线 |
+| 数码管全黑 | 5V 没接 / DIN/CLK 接反 / 亮度没设（代码里默认 4，可改成 8） |
+| 数码管显示乱码 | 接错引脚 / CLK 太快——可在 `tm1640.c` 里把 `TM1640_BIT_DELAY_US` 加大 |
+
+---
+
+## API 用法
+
+```c
+#include "sensors/sht30.h"
+#include "sensors/bmp280.h"
+#include "sensors/tm1640.h"
+
+/* I2C 总线 */
+i2c_bb_t bus = { .sda_pin = 11, .scl_pin = 12 };
+i2c_bb_init(&bus);
+
+/* SHT30 直接读 */
+float t, h;
+if (sht30_read(&bus, &t, &h) == 0) {
+    printf("T=%.1fC H=%.1f%%\n", t, h);
+}
+
+/* BMP280 — 先读校准 */
+bmp280_calib_t cal;
+bmp280_init(&bus, &cal);
+float bt, p;
+bmp280_read(&bus, &cal, &bt, &p);
+
+/* 数码管 */
+tm1640_t tube = { .clk_pin = 3, .data_pin = 13 };
+tm1640_init(&tube);
+tm1640_set_brightness(&tube, 4);   /* 0..8 */
+tm1640_show_text(&tube, "25.6C");
+```
+
+`tm1640_show_text` 识别字符：`0..9` `-` `.` ` ` `C` `H` `F` `P` `E` `r`，其它显示为空白。
 
 ---
 
@@ -62,51 +133,28 @@ git log --oneline -1
 
 | 文件 | 说明 |
 |---|---|
-| `app_demo.c` | 主入口，启动 LCD + servo 任务 |
-| `servo/sg90_control.c` | 软件 PWM 实现（GPIO bit-bang） |
-| `servo/sg90_control.h` | 暴露入口 + 全局状态 |
-| `lcd.c` / `lcd.h` / `fonts.c` / `fonts.h` | ILI9341 LCD 驱动（板厂原版） |
-| `CMakeLists.txt` | 编译清单 |
+| `app_demo.c` | 主入口：LCD 任务 + 1Hz 传感器任务 |
+| `sensors/i2c_bb.{c,h}` | 软件 I2C（任意 GPIO 都能跑） |
+| `sensors/sht30.{c,h}` | SHT30 单次读 + CRC8 校验 |
+| `sensors/bmp280.{c,h}` | BMP280 chip ID + 24 字节校准 + Bosch 补偿算法 |
+| `sensors/tm1640.{c,h}` | TM1640 7 段驱动 + ASCII→段码 |
+| `lcd.c` / `lcd.h` / `fonts.c` / `fonts.h` | ILI9341 LCD 驱动 |
 
 ---
 
-## 想改什么
+## 分支总览
 
-| 想改 | 改这里 |
+| 分支 | 内容 |
 |---|---|
-| 切换不同角度（如转 45°） | `sg90_control.c` 顶部 `US_FOR_*` 宏，1500 居中，每变 1µs 约 0.09° |
-| 改成连续旋转 360° | SG90 是位置舵机，硬件不支持；要换成 MG996R 连续旋转版 |
-| 减速 / 加速过渡 | 把 `servo_move_to` 改成发送一系列渐变的 high_us 值 |
-| 不要循环，停在某个角度 | 在 `servo_task()` 的 `for(;;)` 里只 call 一次然后 sleep 长时间 |
-| 用按键控制角度 | 之前 LCD+LED+ADC 按键的版本在 git history `f9266cd` commit |
+| `main` | SG90 舵机平滑扫描 |
+| `sle-speed-backup` | 两板 SLE 通信 |
+| `nfc-5321` | PN532 NFC 读卡（UART1） |
+| **`temp-humid-sensor`** | 当前：SHT30+BMP280+TM1640 |
 
 ---
 
-## 历史代码
+## 参考
 
-| 想找什么 | 在哪 |
-|---|---|
-| **两板 SLE 双向通信**（sle_speed_server + client） | 分支 `sle-speed-backup`，commit `8af5048` 之前的 main |
-| LCD + LED + 蜂鸣器 + ADC 按键综合 demo | main 分支 commit `f9266cd` |
-| SLE 配网 + HarmonyOS App | 分支 `sle-speed-backup` 之前的 `harmony_app/` 目录（或 commit `dad6991`） |
-| LCD 单显示 demo | commit `163d756` |
-
-切回任意旧版本（**不要**这么做除非你想改回去）：
-```powershell
-git checkout <commit-hash>      # 临时切去查看
-git checkout main               # 切回主线
-```
-
-要把 sle-speed-backup 分支拉到本地：
-```powershell
-git fetch origin sle-speed-backup
-git checkout sle-speed-backup
-```
-
----
-
-## 上游
-
+- 参考自用户给的 ESP32 实现（`sensor_sht30.c`, `bmp280_i2c.c`, `sx_tm1640.c`）
 - WS63 SDK 上游：https://gitee.com/HiSpark/fbb_ws63
 - 完整 SDK 镜像：https://github.com/shodan1q/haisi_ws63
-- SG90 demo 参考自：`vendor/HiHope_NearLink_DK_WS63E_V03/demo/servo/sg92r_control.c`

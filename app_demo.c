@@ -122,24 +122,36 @@ static void *sensor_task(const char *arg)
             g_bmp_err++;
         }
 
-        /* TM1640 — show both at once in 7-digit "TT.T HH.H" form.
-         * ESP32 reference used pattern like "520.1314" (7 digits, 1 dp);
-         * we use 7 digits with 2 decimal points: temperature on the left,
-         * a single blank digit in the middle, humidity on the right. */
-        {
+        /* TM1640 — ESP32-style rotating display (like test_tm1640's cycle
+         * through `segments` / `segments2` / `number`). We rotate between
+         * two screens, holding each for SCREEN_HOLD_S seconds:
+         *
+         *   page 0  "25.6 65.3"  → 7 digits: T int, T units+dp, T frac,
+         *                          blank, H int, H units+dp, H frac
+         *   page 1  "P 1013.2"   → 7 digits: 'P', blank, 4 pressure
+         *                          digits with dp before last
+         */
+        #define SCREEN_HOLD_S  3
+        int page = (loop / SCREEN_HOLD_S) % 2;
+        if (page == 0) {
             int t_int  = (int)g_temp_c;
             int t_frac = (int)((g_temp_c - t_int) * 10);
             if (t_frac < 0) t_frac = -t_frac;
             int h_int  = (int)g_humid_p;
             int h_frac = (int)((g_humid_p - h_int) * 10);
             if (h_frac < 0) h_frac = 0;
-            /* "%2d.%d %2d.%d" expands to e.g. "25.6 65.3" — 9 ASCII chars
-             * which the tm1640_show_text helper collapses to 7 digit
-             * positions (each '.' is OR-ed into the digit to its left). */
             snprintf(dispbuf, sizeof(dispbuf), "%2d.%d %2d.%d",
                      t_int, t_frac, h_int, h_frac);
-            tm1640_show_text(&g_tm1640, dispbuf);
+        } else {
+            int p_int  = (int)g_press_hpa;
+            int p_frac = (int)((g_press_hpa - p_int) * 10);
+            if (p_frac < 0) p_frac = 0;
+            /* "P %4d.%d" → e.g. "P 1013.2" → 8 chars; after dp merge that
+             * leaves exactly 7 digit positions: 'P', ' ', '1','0','1',
+             * '3'+dp, '2' */
+            snprintf(dispbuf, sizeof(dispbuf), "P %4d.%d", p_int, p_frac);
         }
+        tm1640_show_text(&g_tm1640, dispbuf);
 
         osal_printk("[loop %lu] sht30 rc=%d T=%d.%d H=%d.%d  "
                     "bmp rc=%d P=%d.%d  ok=S%lu/B%lu err=S%lu/B%lu  show=\"%s\"\r\n",

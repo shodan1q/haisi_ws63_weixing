@@ -25,9 +25,7 @@ static inline void sda_hi(const i2c_bb_t *b) { uapi_gpio_set_dir(b->sda_pin, GPI
 
 static inline int sda_read(const i2c_bb_t *b)
 {
-    gpio_level_t v = GPIO_LEVEL_HIGH;
-    uapi_gpio_get_val(b->sda_pin, &v);
-    return v == GPIO_LEVEL_HIGH ? 1 : 0;
+    return uapi_gpio_get_val(b->sda_pin) == GPIO_LEVEL_HIGH ? 1 : 0;
 }
 
 static inline void hold(void) { uapi_systick_delay_us(I2C_BIT_DELAY_US); }

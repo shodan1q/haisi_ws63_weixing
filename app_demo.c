@@ -4,11 +4,11 @@
  * Sensors:
  *   SHT30   (I2C 0x44) on bit-bang bus  — SDA=GPIO_11, SCL=GPIO_12
  *   BMP280  (I2C 0x76) on the same bus  — same SDA/SCL
- *   TM1640  (2-wire serial, NOT i2c)    — DIN=GPIO_13, CLK=GPIO_3
+ *   TM1640  (2-wire serial, NOT i2c)    — DIN=GPIO_13, CLK=GPIO_14
  *
- * ⚠️ GPIO_3 on this board is wired to LCD WR/DC. To avoid bus contention,
- * the on-board LCD task is disabled on this branch (set ENABLE_LCD to 1
- * if you have moved TM1640 CLK to another pin).
+ * GPIO_14 was originally FLASH_CS on the board; we re-use it because the
+ * on-board flash chip isn't part of this demo. The LCD's WR/DC line on
+ * GPIO_3 is now free, so the on-board LCD task is re-enabled.
  */
 #include <stdio.h>
 #include <string.h>
@@ -16,7 +16,7 @@
 #include "soc_osal.h"
 #include "app_init.h"
 
-#define ENABLE_LCD 0     /* keep 0: LCD's D/C is GPIO_3, conflicts with TM1640 CLK */
+#define ENABLE_LCD 1     /* GPIO_3 is back to LCD D/C; tube CLK moved to GPIO_14 */
 
 #if ENABLE_LCD
 #include "lcd.h"
@@ -31,7 +31,7 @@
 #define SENSOR_BUS_SDA   11
 #define SENSOR_BUS_SCL   12
 #define TM1640_DATA_PIN  13
-#define TM1640_CLK_PIN    3
+#define TM1640_CLK_PIN   14
 
 /* ---- task config ---- */
 #define SENSOR_TASK_STACK 0x1400

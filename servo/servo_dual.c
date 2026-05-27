@@ -9,6 +9,7 @@
 #include "soc_osal.h"
 #include "watchdog.h"
 #include "app_init.h"
+#include "osal_interrupt.h"
 
 #include "servo_dual.h"
 
@@ -52,12 +53,20 @@ static unsigned int angle_to_us(int deg)
  * past 20 ms is fine — servos only care about the HIGH width. */
 static void emit_frame(unsigned int high_us)
 {
+    /* Lock interrupts for ONLY the HIGH pulse so WiFi/BT IRQs can't stretch
+     * it (that stretching is what made the servo jitter). The pulse is
+     * <=2.5 ms. uapi_systick_delay_us busy-polls the systick counter and
+     * needs no interrupts, so locking here is safe. */
+    unsigned int cpsr = osal_irq_lock();
     uapi_gpio_set_val(SERVO_A_PIN, GPIO_LEVEL_HIGH);
     uapi_gpio_set_val(SERVO_B_PIN, GPIO_LEVEL_HIGH);
     uapi_systick_delay_us(high_us);
     uapi_gpio_set_val(SERVO_A_PIN, GPIO_LEVEL_LOW);
     uapi_gpio_set_val(SERVO_B_PIN, GPIO_LEVEL_LOW);
-    osal_msleep((PERIOD_US - high_us) / 1000);   /* ~18 ms, yields CPU */
+    osal_irq_restore(cpsr);
+
+    /* LOW remainder with interrupts on, yielding CPU to other tasks. */
+    osal_msleep((PERIOD_US - high_us) / 1000);   /* ~18 ms */
 }
 
 void servo_set_angle(int angle_deg)

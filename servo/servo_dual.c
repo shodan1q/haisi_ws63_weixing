@@ -42,7 +42,14 @@ static unsigned int angle_to_us(int deg)
     return (unsigned int)(US_FOR_CENTER + deg * (int)(US_FOR_MAX - US_FOR_CENTER) / 90);
 }
 
-/* Emit one 20 ms frame driving BOTH pins with the same pulse width. */
+/* Emit one ~20 ms frame driving BOTH pins with the same pulse width.
+ *
+ * The HIGH pulse (0.5–2.5 ms) is a precise busy-wait — that's what the servo
+ * actually decodes. The LOW remainder (~17.5–19.5 ms) is done with
+ * osal_msleep so the scheduler can run the WiFi / MQTT / LCD tasks. Without
+ * this yield the servo task (higher priority, never blocking) starves
+ * everything else and WiFi never connects. The exact period drifting a bit
+ * past 20 ms is fine — servos only care about the HIGH width. */
 static void emit_frame(unsigned int high_us)
 {
     uapi_gpio_set_val(SERVO_A_PIN, GPIO_LEVEL_HIGH);
@@ -50,7 +57,7 @@ static void emit_frame(unsigned int high_us)
     uapi_systick_delay_us(high_us);
     uapi_gpio_set_val(SERVO_A_PIN, GPIO_LEVEL_LOW);
     uapi_gpio_set_val(SERVO_B_PIN, GPIO_LEVEL_LOW);
-    uapi_systick_delay_us(PERIOD_US - high_us);
+    osal_msleep((PERIOD_US - high_us) / 1000);   /* ~18 ms, yields CPU */
 }
 
 void servo_set_angle(int angle_deg)

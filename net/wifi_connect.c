@@ -105,6 +105,15 @@ td_s32 example_get_match_network(wifi_sta_config_stru *expected_bss, const char 
         osal_kfree(result);
         return -1;
     }
+    /* DEBUG: dump every scanned SSID so we can see the real names in range.
+     * Look for your target here — note WS63 only scans 2.4 GHz. */
+    PRINT("%s::---- scan list (%u APs), looking for '%s' ----\r\n",
+          WIFI_STA_SAMPLE_LOG, num, ssid);
+    for (bss_index = 0; bss_index < num; bss_index++) {
+        PRINT("%s::  [%u] '%s' rssi=%d\r\n", WIFI_STA_SAMPLE_LOG, bss_index,
+              result[bss_index].ssid, result[bss_index].rssi);
+    }
+
     /* 筛选扫描到的Wi-Fi网络，选择待连接的网络 */
     for (bss_index = 0; bss_index < num; bss_index++) {
         if (strlen(ssid) == strlen(result[bss_index].ssid)) {

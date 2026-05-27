@@ -23,8 +23,8 @@
 #include "laser.h"
 
 /* ---- Wi-Fi credentials — EDIT THESE before flashing ---- */
-#define WIFI_SSID  "shodan"
-#define WIFI_PWD   "lalalala"
+#define WIFI_SSID  "Xiaomi_LIKONG"
+#define WIFI_PWD   "GY18392501558"
 
 #define LCD_TASK_STACK   0x1000
 #define NET_TASK_STACK   0x2000

@@ -98,18 +98,37 @@ static void *servo_task(const char *arg)
     g_servo_angle = 0;
     osal_printk("[servo] reset to center done\r\n");
 
-    /* --- Continuous refresh + smooth sweep toward target --- */
+    /* --- Move only while needed; go SILENT once settled. ---
+     * Software-timed PWM in an RTOS always has some frame-to-frame jitter,
+     * and a servo that keeps receiving slightly-irregular pulses twitches.
+     * SG90 holds its last position mechanically with NO signal, so once we
+     * reach the target (plus a short settle burst) we stop pulsing entirely
+     * — that kills the idle twitching. A new MQTT target resumes pulses. */
+    #define SETTLE_FRAMES  25      /* keep pulsing ~0.5 s after arriving */
+    int settle = 0;
     for (;;) {
         uapi_watchdog_kick();
-        if (g_current_us < g_target_us) {
-            unsigned int d = g_target_us - g_current_us;
-            g_current_us += (d < SWEEP_STEP_US) ? d : SWEEP_STEP_US;
-        } else if (g_current_us > g_target_us) {
-            unsigned int d = g_current_us - g_target_us;
-            g_current_us -= (d < SWEEP_STEP_US) ? d : SWEEP_STEP_US;
+
+        if (g_current_us != g_target_us) {
+            /* moving: step toward target, emit one frame */
+            if (g_current_us < g_target_us) {
+                unsigned int d = g_target_us - g_current_us;
+                g_current_us += (d < SWEEP_STEP_US) ? d : SWEEP_STEP_US;
+            } else {
+                unsigned int d = g_current_us - g_target_us;
+                g_current_us -= (d < SWEEP_STEP_US) ? d : SWEEP_STEP_US;
+            }
+            emit_frame(g_current_us);
+            g_servo_angle = us_to_angle(g_current_us);
+            settle = 0;
+        } else if (settle < SETTLE_FRAMES) {
+            /* just arrived: keep pulsing briefly so it locks in */
+            emit_frame(g_current_us);
+            settle++;
+        } else {
+            /* settled: STOP pulsing — no signal, no jitter, holds by gears */
+            osal_msleep(40);
         }
-        emit_frame(g_current_us);
-        g_servo_angle = us_to_angle(g_current_us);
     }
     return NULL;
 }

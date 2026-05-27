@@ -40,6 +40,18 @@ static void *net_task(const char *arg)
 {
     unused(arg);
 
+    /* Laser self-test — independent of MQTT. Drives GPIO_10 on/off 3×.
+     * If a visible laser blinks (or an IR emitter blinks when viewed
+     * through a phone camera), GPIO_10 control works and any "can't
+     * control" problem is on the MQTT side. If it never lights here,
+     * it's wiring / transistor polarity / pin. */
+    osal_printk("[laser] self-test: blink GPIO_10 x3\r\n");
+    for (int i = 0; i < 3; i++) {
+        laser_set(true);  osal_msleep(400);
+        laser_set(false); osal_msleep(400);
+    }
+    osal_printk("[laser] self-test done\r\n");
+
     osal_printk("[net] connecting WiFi SSID=%s ...\r\n", WIFI_SSID);
     if (wifi_connect(WIFI_SSID, WIFI_PWD) != 0) {
         osal_printk("[net] wifi_connect failed\r\n");

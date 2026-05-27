@@ -22,8 +22,8 @@
 #include "net/mqtt_app.h"
 
 /* ---- Wi-Fi credentials — EDIT THESE before flashing ---- */
-#define WIFI_SSID  "your_ssid_here"
-#define WIFI_PWD   "your_password_here"
+#define WIFI_SSID  "shodan"
+#define WIFI_PWD   "lalalala"
 
 #define LCD_TASK_STACK   0x1000
 #define NET_TASK_STACK   0x2000

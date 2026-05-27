@@ -17,7 +17,10 @@
 
 /* ===== config copied from esp32watch/firmware/main/bsp_mqtt.c ===== */
 #define MQTT_ADDRESS    "tcp://121.41.23.138:1883"
-#define MQTT_CLIENTID   "weixing-a1"
+#define MQTT_CLIENTID   "weixing-ws63"   /* MUST differ from the watch's
+                                            "weixing-a1" — a broker drops the
+                                            older session when a second client
+                                            connects with the same id. */
 #define MQTT_USERNAME   "public"
 #define MQTT_PASSWORD   "Aa123456"
 #define TOPIC_SERVO     "sat/a1/servo"      /* payload = angle int -90..90 */

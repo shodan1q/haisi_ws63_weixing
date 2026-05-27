@@ -13,14 +13,16 @@
 
 #include "mqtt_app.h"
 #include "../servo/servo_dual.h"
+#include "../laser.h"
 
 /* ===== config copied from esp32watch/firmware/main/bsp_mqtt.c ===== */
 #define MQTT_ADDRESS    "tcp://121.41.23.138:1883"
 #define MQTT_CLIENTID   "weixing-a1"
 #define MQTT_USERNAME   "public"
 #define MQTT_PASSWORD   "Aa123456"
-#define TOPIC_CMD       "sat/a1/cmd"
-#define TOPIC_TELEMETRY "sat/a1/telemetry"
+#define TOPIC_SERVO     "sat/a1/servo"      /* payload = angle int -90..90 */
+#define TOPIC_LASER     "sat/a1/laser"      /* payload = on/off/1/0 */
+#define TOPIC_TELEMETRY "sat/a1/telemetry"  /* {"angle":N,"laser":0/1} */
 #define MQTT_QOS        0
 
 extern int MQTTClient_init(void);
@@ -48,12 +50,19 @@ static int on_msg_arrived(void *context, char *topic_name, int topic_len,
     memcpy(buf, message->payload, n);
     buf[n] = '\0';
 
-    osal_printk("[mqtt] cmd on %s = '%s'\r\n", topic_name, buf);
+    osal_printk("[mqtt] msg on %s = '%s'\r\n", topic_name, buf);
 
-    /* Command payload is the target angle in degrees (e.g. "45", "-90"). */
-    int angle = atoi(buf);
-    servo_set_angle(angle);
-    osal_printk("[mqtt] servo target set to %d deg\r\n", angle);
+    /* Dispatch by topic. topic_name may not be NUL-safe to strcmp the whole
+     * string, so match on a substring. */
+    if (strstr(topic_name, "servo") != NULL) {
+        int angle = atoi(buf);            /* e.g. "45", "-90" */
+        servo_set_angle(angle);
+        osal_printk("[mqtt] servo target set to %d deg\r\n", angle);
+    } else if (strstr(topic_name, "laser") != NULL) {
+        bool on = (buf[0] == '1') || (buf[0] == 'o' && buf[1] == 'n') ||
+                  (buf[0] == 'O' && buf[1] == 'N') || (buf[0] == 't');  /* 1/on/ON/true */
+        laser_set(on);
+    }
 
     MQTTClient_freeMessage(&message);
     MQTTClient_free(topic_name);
@@ -87,23 +96,28 @@ int mqtt_app_connect(void)
     }
     osal_printk("[mqtt] connected to %s as %s\r\n", MQTT_ADDRESS, MQTT_CLIENTID);
 
-    rc = MQTTClient_subscribe(s_client, TOPIC_CMD, MQTT_QOS);
-    if (rc != MQTTCLIENT_SUCCESS) {
-        osal_printk("[mqtt] subscribe %s failed rc=%d\r\n", TOPIC_CMD, rc);
+    if (MQTTClient_subscribe(s_client, TOPIC_SERVO, MQTT_QOS) == MQTTCLIENT_SUCCESS) {
+        osal_printk("[mqtt] subscribed %s\r\n", TOPIC_SERVO);
     } else {
-        osal_printk("[mqtt] subscribed %s\r\n", TOPIC_CMD);
+        osal_printk("[mqtt] subscribe %s failed\r\n", TOPIC_SERVO);
+    }
+    if (MQTTClient_subscribe(s_client, TOPIC_LASER, MQTT_QOS) == MQTTCLIENT_SUCCESS) {
+        osal_printk("[mqtt] subscribed %s\r\n", TOPIC_LASER);
+    } else {
+        osal_printk("[mqtt] subscribe %s failed\r\n", TOPIC_LASER);
     }
 
     s_connected = true;
     return 0;
 }
 
-int mqtt_app_publish_telemetry(int angle_deg)
+int mqtt_app_publish_telemetry(int angle_deg, int laser_on)
 {
     if (!s_connected) return -1;
 
     char payload[48];
-    snprintf(payload, sizeof(payload), "{\"angle\":%d}", angle_deg);
+    snprintf(payload, sizeof(payload), "{\"angle\":%d,\"laser\":%d}",
+             angle_deg, laser_on ? 1 : 0);
 
     MQTTClient_message pubmsg = MQTTClient_message_initializer;
     MQTTClient_deliveryToken token;

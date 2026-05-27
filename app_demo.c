@@ -20,6 +20,7 @@
 #include "servo/servo_dual.h"
 #include "net/wifi_connect.h"
 #include "net/mqtt_app.h"
+#include "laser.h"
 
 /* ---- Wi-Fi credentials — EDIT THESE before flashing ---- */
 #define WIFI_SSID  "shodan"
@@ -60,7 +61,7 @@ static void *net_task(const char *arg)
     for (;;) {
         if (mqtt_app_is_connected()) {
             g_mqtt_ok = 1;
-            mqtt_app_publish_telemetry(g_servo_angle);
+            mqtt_app_publish_telemetry(g_servo_angle, laser_get() ? 1 : 0);
         } else {
             g_mqtt_ok = 0;
             osal_printk("[net] mqtt dropped, reconnecting...\r\n");
@@ -81,7 +82,7 @@ static void *lcd_task(const char *arg)
     spi_lcd_display_string_line(0, 0, GREEN, BLACK, (uint8_t *)hdr);
     spi_lcd_display_string_line(0, 1, WHITE, BLACK, (uint8_t *)pins);
 
-    char wifi_line[28], mqtt_line[28], ang_line[28], up[28];
+    char wifi_line[28], mqtt_line[28], ang_line[28], laser_line[28], up[28];
     uint32_t tick = 0;
     for (;;) {
         snprintf(wifi_line, sizeof(wifi_line), "WiFi: %s     ",
@@ -89,13 +90,16 @@ static void *lcd_task(const char *arg)
         snprintf(mqtt_line, sizeof(mqtt_line), "MQTT: %s     ",
                  g_mqtt_ok ? "CONNECTED" : "...");
         snprintf(ang_line, sizeof(ang_line), "Angle: %+4d deg   ", g_servo_angle);
+        snprintf(laser_line, sizeof(laser_line), "Laser: %s   ",
+                 laser_get() ? "ON " : "OFF");
         spi_lcd_display_string_line(0, 3, g_wifi_ok ? GREEN : WHITE, BLACK, (uint8_t *)wifi_line);
         spi_lcd_display_string_line(0, 4, g_mqtt_ok ? GREEN : WHITE, BLACK, (uint8_t *)mqtt_line);
         spi_lcd_display_string_line(0, 5, WHITE, BLACK, (uint8_t *)ang_line);
+        spi_lcd_display_string_line(0, 6, laser_get() ? RED : WHITE, BLACK, (uint8_t *)laser_line);
 
         tick++;
         snprintf(up, sizeof(up), "Uptime: %lu s", (unsigned long)(tick * 300 / 1000));
-        spi_lcd_display_string_line(0, 7, WHITE, BLACK, (uint8_t *)up);
+        spi_lcd_display_string_line(0, 8, WHITE, BLACK, (uint8_t *)up);
         osal_msleep(300);
     }
     return NULL;
@@ -104,6 +108,9 @@ static void *lcd_task(const char *arg)
 static void app_entry(void)
 {
     uapi_watchdog_disable();
+
+    /* Laser/IR emitter off at boot. */
+    laser_init();
 
     /* Servos first: reset to center immediately on boot. */
     servo_dual_start();

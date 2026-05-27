@@ -10,6 +10,7 @@ set(SOURCES "${SOURCES}"
     "${CMAKE_CURRENT_SOURCE_DIR}/lcd.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/fonts.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/servo/servo_dual.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/laser.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/net/wifi_connect.c"
     "${CMAKE_CURRENT_SOURCE_DIR}/net/mqtt_app.c"
     PARENT_SCOPE)

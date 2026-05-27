@@ -22,16 +22,24 @@ WS63 个人开发分仓 —— **两个 SG90 舵机（GPIO_8 / GPIO_9）+ WiFi +
 | Client ID | `weixing-a1` |
 | 用户名 | `public` |
 | 密码 | `Aa123456` |
-| 订阅（命令） | `sat/a1/cmd` |
+| 订阅（舵机） | `sat/a1/servo` |
+| 订阅（激光/红外灯） | `sat/a1/laser` |
 | 发布（遥测） | `sat/a1/telemetry` |
 
-- **命令格式**：payload 直接是目标角度的 ASCII 整数，范围 -90 ~ +90。
-  例：往 `sat/a1/cmd` 发 `45` → 两个舵机转到 +45°；发 `-90` → 转到 -90°。
-- **遥测格式**：每 3 秒往 `sat/a1/telemetry` 发 `{"angle":N}`。
+- **舵机命令**：payload 是目标角度 ASCII 整数 -90 ~ +90。
+  发 `45` → 两舵机同步转到 +45°；发 `-90` → -90°。
+- **激光灯命令**：payload `1`/`on`/`ON`/`true` → 开；`0`/`off` → 关。
+- **遥测**：每 3 秒往 `sat/a1/telemetry` 发 `{"angle":N,"laser":0/1}`。
 
 测试命令（电脑上装了 mosquitto）：
 ```bash
-mosquitto_pub -h 121.41.23.138 -p 1883 -u public -P Aa123456 -t sat/a1/cmd -m 45
+# 舵机
+mosquitto_pub -h 121.41.23.138 -p 1883 -u public -P Aa123456 -t sat/a1/servo -m 45
+mosquitto_pub -h 121.41.23.138 -p 1883 -u public -P Aa123456 -t sat/a1/servo -m -90
+# 激光/红外灯
+mosquitto_pub -h 121.41.23.138 -p 1883 -u public -P Aa123456 -t sat/a1/laser -m on
+mosquitto_pub -h 121.41.23.138 -p 1883 -u public -P Aa123456 -t sat/a1/laser -m off
+# 看遥测
 mosquitto_sub -h 121.41.23.138 -p 1883 -u public -P Aa123456 -t sat/a1/telemetry
 ```
 
@@ -45,6 +53,8 @@ mosquitto_sub -h 121.41.23.138 -p 1883 -u public -P Aa123456 -t sat/a1/telemetry
 | 舵机 B | 橙色（信号） | **GPIO_9** |
 | 两个舵机 | 红色 VCC | 5V |
 | 两个舵机 | 棕色 GND | GND |
+| 红外/激光灯 | 三极管基极（经限流电阻） | **GPIO_10** |
+| 红外/激光灯 | 三极管 + 灯供电 | 按你电路 |
 
 ⚠️ 两个 SG90 同时动，峰值电流可能 ~500mA。**强烈建议用外置 5V 电源**给舵机供电，和板子共地，不要全靠 USB 5V（容易掉电复位）。
 

@@ -4,7 +4,7 @@
  * Sensors:
  *   SHT30   (I2C 0x44) on bit-bang bus  — SDA=GPIO_7,  SCL=GPIO_8
  *   BMP280  (I2C 0x76) on the same bus  — same SDA/SCL
- *   TM1640  (2-wire serial, NOT i2c)    — DIN=GPIO_13, CLK=GPIO_14
+ *   TM1640  (2-wire serial, NOT i2c)    — DIN=GPIO_14, CLK=GPIO_13
  *
  * GPIO_14 was originally FLASH_CS on the board; we re-use it because the
  * on-board flash chip isn't part of this demo. The LCD's WR/DC line on
@@ -30,8 +30,9 @@
 /* ---- wiring ---- */
 #define SENSOR_BUS_SDA    7
 #define SENSOR_BUS_SCL    8
-#define TM1640_DATA_PIN  13
-#define TM1640_CLK_PIN   14
+/* TM1640 module pins (some boards label these as SDA/SCL on the silk). */
+#define TM1640_DATA_PIN  14   /* was 13 — swapped per board wiring */
+#define TM1640_CLK_PIN   13   /* was 14 — swapped per board wiring */
 
 /* ---- task config ---- */
 #define SENSOR_TASK_STACK 0x1400
@@ -174,7 +175,7 @@ static void *lcd_task(const char *arg)
 {
     unused(arg);
     char hdr[]  = "WS63 T/H/P sensor";
-    char pins[] = "SDA7/SCL8 Tube14/13";
+    char pins[] = "SDA7/SCL8 Tube DIN14/CLK13";
     spi_lcd_init();
     spi_lcd_clear(BLACK);
     spi_lcd_display_string_line(0, 0, GREEN, BLACK, (uint8_t *)hdr);

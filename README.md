@@ -1,6 +1,6 @@
 # haisi_ws63_weixing · 温湿度变送器 + MQTT（branch temp-humid-sensor）
 
-WS63 个人开发分仓 —— **温湿度 + 气压变送器，含 WiFi/MQTT 远程上报**。
+WS63 个人开发分仓 —— **温湿度 + 气压变送器，含 WiFi/MQTT 请求-响应接口**。
 
 | 模块 | 总线 / 引脚 | 用途 |
 |---|---|---|
@@ -28,40 +28,40 @@ WiFi 账密在 `app_demo.c` 顶部 `#define WIFI_SSID` / `#define WIFI_PWD` 改�
 
 ---
 
-## MQTT 话题（Tasmota 风格）
+## MQTT 话题（请求-响应模式）
 
-### Publish（板子→外部）
+板子**不会主动定时上报**——只有当 broker 上有人发 `cmnd/ws63_sensor/get` 时，才推送一次。所有 publish 都是 **非 retained**，单纯订阅 `stat/...` 不会自动收到旧值，必须先 `cmnd/get` 一下。
 
-每 **5 秒** 自动上报：
+### 触发上报（外部→板子）
 
-| Topic | 内容 | Retained |
-|---|---|---|
-| `tele/ws63_sensor/SENSOR` | JSON `{"temp":25.6,"humid":65.3,"press":1013.2}` | ✓ |
-| `tele/ws63_sensor/temperature` | `"25.6"` | ✓ |
-| `tele/ws63_sensor/humidity` | `"65.3"` | ✓ |
-| `tele/ws63_sensor/pressure` | `"1013.2"` | ✓ |
+| Topic | payload |
+|---|---|
+| `cmnd/ws63_sensor/get` | 任意（`1`、`now`、`{}` 都行）|
 
-Retained=1 表示订阅者一连上 broker 就立刻收到最新值，不用等下一次刷新。
+### 响应（板子→外部）
 
-### Subscribe（外部→板子）
+收到 cmd 后立即推送 4 条 `stat/...` 消息：
 
-| Topic | payload | 行为 |
-|---|---|---|
-| `cmnd/ws63_sensor/get` | 任意 | 立即把当前读数发到 `stat/ws63_sensor/SENSOR`（JSON 同上） |
+| Topic | 内容 |
+|---|---|
+| `stat/ws63_sensor/SENSOR` | JSON `{"temp":25.6,"humid":65.3,"press":1013.2}` |
+| `stat/ws63_sensor/temperature` | `25.6` |
+| `stat/ws63_sensor/humidity` | `65.3` |
+| `stat/ws63_sensor/pressure` | `1013.2` |
 
 ### 测试命令（电脑装了 mosquitto）
 
 ```bash
-# 订阅所有遥测话题
-mosquitto_sub -h 121.41.23.138 -p 1883 -u public -P Aa123456 -t 'tele/ws63_sensor/#' -v
+# 终端 1：订阅响应（先开着，平时是静默的）
+mosquitto_sub -h 121.41.23.138 -p 1883 -u public -P Aa123456 \
+              -t 'stat/ws63_sensor/#' -v
 
-# 只看 JSON
-mosquitto_sub -h 121.41.23.138 -p 1883 -u public -P Aa123456 -t 'tele/ws63_sensor/SENSOR'
-
-# 立即触发一次上报，结果在 stat 话题
-mosquitto_sub -h 121.41.23.138 -p 1883 -u public -P Aa123456 -t 'stat/ws63_sensor/SENSOR' &
-mosquitto_pub -h 121.41.23.138 -p 1883 -u public -P Aa123456 -t cmnd/ws63_sensor/get -m '1'
+# 终端 2：每次想拿数据就发一次 get
+mosquitto_pub -h 121.41.23.138 -p 1883 -u public -P Aa123456 \
+              -t cmnd/ws63_sensor/get -m 1
 ```
+
+每发一次 `cmnd/get`，终端 1 立刻打印 4 条 `stat/...` 消息。如果不发，终端 1 始终静默。
 
 ---
 
@@ -139,15 +139,15 @@ WiFi:OK  MQTT:OK        (绿)
 
 ### MQTT 订阅端能看到
 
-```
-$ mosquitto_sub -h 121.41.23.138 -p 1883 -u public -P Aa123456 -t 'tele/ws63_sensor/#' -v
-tele/ws63_sensor/SENSOR {"temp":25.6,"humid":65.3,"press":1013.2}
-tele/ws63_sensor/temperature 25.6
-tele/ws63_sensor/humidity 65.3
-tele/ws63_sensor/pressure 1013.2
-```
+平时静默。每发一次 `cmnd/ws63_sensor/get`，立刻出 4 条：
 
-每 5 秒刷新一次。
+```
+$ mosquitto_sub -h 121.41.23.138 -p 1883 -u public -P Aa123456 -t 'stat/ws63_sensor/#' -v
+stat/ws63_sensor/SENSOR {"temp":25.6,"humid":65.3,"press":1013.2}
+stat/ws63_sensor/temperature 25.6
+stat/ws63_sensor/humidity 65.3
+stat/ws63_sensor/pressure 1013.2
+```
 
 ---
 
@@ -156,7 +156,6 @@ tele/ws63_sensor/pressure 1013.2
 | 想改 | 改这里 |
 |---|---|
 | WiFi 账密 | `app_demo.c` 顶部 `WIFI_SSID` / `WIFI_PWD` |
-| 上报周期（默认 5 s） | `app_demo.c` 的 `MQTT_PUBLISH_PERIOD_MS` |
 | 设备名（topic root） | `net/sensors_mqtt.c` 的 `DEV_ID` (`ws63_sensor`) |
 | Broker / 账密 | `net/sensors_mqtt.c` 顶部 `MQTT_*` 宏 |
 | Client ID | `MQTT_CLIENTID`（必须独一，不能撞手表/舵机板） |
@@ -173,7 +172,7 @@ tele/ws63_sensor/pressure 1013.2
 | `sensors/bmp280.{c,h}` | BMP280 校准 + Bosch 补偿 |
 | `sensors/tm1640.{c,h}` | TM1640 7 段驱动 + ASCII→段码 |
 | `net/wifi_connect.{c,h}` | 阻塞式 WiFi STA 连接 |
-| `net/sensors_mqtt.{c,h}` | Paho MQTT 包装，Tasmota 风格 topic |
+| `net/sensors_mqtt.{c,h}` | Paho MQTT 包装，请求-响应模式 |
 | `lcd.c` / `lcd.h` / `fonts.c` / `fonts.h` | ILI9341 LCD |
 
 ---

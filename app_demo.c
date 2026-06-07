@@ -32,7 +32,6 @@
 /* ---- WiFi credentials — edit if your AP changes. ---- */
 #define WIFI_SSID  "NBeeNET"
 #define WIFI_PWD   "nbeenet88888888"
-#define MQTT_PUBLISH_PERIOD_MS  5000
 
 /* ---- wiring ---- */
 #define SENSOR_BUS_SDA    7
@@ -94,17 +93,18 @@ static void *net_task(const char *arg)
     }
     g_mqtt_ok = 1;
 
-    /* Periodic telemetry. */
+    /* No periodic publish — telemetry only goes out when somebody asks via
+     * cmnd/ws63_sensor/get (handled by snapshot_cb in the MQTT callback).
+     * This loop just keeps the connection healthy and reconnects if dropped. */
     for (;;) {
         if (sensors_mqtt_is_connected()) {
             g_mqtt_ok = 1;
-            sensors_mqtt_publish_telemetry(g_temp_c, g_humid_p, g_press_hpa);
         } else {
             g_mqtt_ok = 0;
             osal_printk("[net] mqtt dropped, reconnecting...\r\n");
             sensors_mqtt_connect();
         }
-        osal_msleep(MQTT_PUBLISH_PERIOD_MS);
+        osal_msleep(3000);
     }
     return NULL;
 }

@@ -1,7 +1,10 @@
 /*
  * Paho MQTT client for the WS63 sensor board (SHT30 + BMP280).
- * Tasmota-style topic layout — one periodic JSON to tele/.../SENSOR plus
- * individual sub-topics per value, on-demand fetch via cmnd/.../get.
+ *
+ * Request-response design: the board only publishes after receiving a
+ * cmnd/ws63_sensor/get message. Subscribers that just sit on tele/.../#
+ * will see nothing — they have to ask. Published messages are NOT
+ * retained, so the broker doesn't hold stale data either.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -24,11 +27,10 @@
 
 /* ---- topic root ------------------------------------------------------- */
 #define DEV_ID          "ws63_sensor"
-#define TOPIC_TELE_JSON "tele/" DEV_ID "/SENSOR"
-#define TOPIC_TELE_T    "tele/" DEV_ID "/temperature"
-#define TOPIC_TELE_H    "tele/" DEV_ID "/humidity"
-#define TOPIC_TELE_P    "tele/" DEV_ID "/pressure"
-#define TOPIC_STAT_JSON "stat/" DEV_ID "/SENSOR"
+#define TOPIC_RESP_JSON "stat/" DEV_ID "/SENSOR"
+#define TOPIC_RESP_T    "stat/" DEV_ID "/temperature"
+#define TOPIC_RESP_H    "stat/" DEV_ID "/humidity"
+#define TOPIC_RESP_P    "stat/" DEV_ID "/pressure"
 #define TOPIC_CMD_GET   "cmnd/" DEV_ID "/get"
 
 extern int MQTTClient_init(void);
@@ -42,19 +44,18 @@ void sensors_mqtt_set_snapshot_cb(sensors_mqtt_snapshot_cb_t cb)
     s_snap_cb = cb;
 }
 
-static int publish_one(const char *topic, const char *payload, int retained)
+static int publish_one(const char *topic, const char *payload)
 {
     MQTTClient_message m = MQTTClient_message_initializer;
     MQTTClient_deliveryToken tok;
     m.payload    = (void *)payload;
     m.payloadlen = (int)strlen(payload);
     m.qos        = MQTT_QOS;
-    m.retained   = retained;
+    m.retained   = 0;     /* never retain — strict request/response */
     return MQTTClient_publishMessage(s_client, topic, &m, &tok);
 }
 
-static void publish_snapshot(const char *json_topic,
-                             float t, float h, float p)
+static void publish_snapshot(float t, float h, float p)
 {
     char json[96];
     char buf[16];
@@ -63,14 +64,15 @@ static void publish_snapshot(const char *json_topic,
              (int)t, (int)((t - (int)t) * 10),
              (int)h, (int)((h - (int)h) * 10),
              (int)p, (int)((p - (int)p) * 10));
-    publish_one(json_topic, json, 1);
+    publish_one(TOPIC_RESP_JSON, json);
 
     snprintf(buf, sizeof(buf), "%d.%d", (int)t, (int)((t - (int)t) * 10));
-    publish_one(TOPIC_TELE_T, buf, 1);
+    publish_one(TOPIC_RESP_T, buf);
     snprintf(buf, sizeof(buf), "%d.%d", (int)h, (int)((h - (int)h) * 10));
-    publish_one(TOPIC_TELE_H, buf, 1);
+    publish_one(TOPIC_RESP_H, buf);
     snprintf(buf, sizeof(buf), "%d.%d", (int)p, (int)((p - (int)p) * 10));
-    publish_one(TOPIC_TELE_P, buf, 1);
+    publish_one(TOPIC_RESP_P, buf);
+    osal_printk("[mqtt] -> %s %s\r\n", TOPIC_RESP_JSON, json);
 }
 
 static void on_conn_lost(void *context, char *cause)
@@ -88,12 +90,12 @@ static int on_msg_arrived(void *context, char *topic_name, int topic_len,
 
     osal_printk("[mqtt] cmd on %s\r\n", topic_name);
 
-    /* The only thing we subscribe to is cmnd/.../get. Any payload triggers
-     * an immediate publish to stat/.../SENSOR with the latest reading. */
+    /* Only thing we subscribe to is cmnd/.../get. Any payload triggers
+     * a fresh snapshot publish to stat/.../SENSOR. */
     if (s_snap_cb) {
         float t = 0, h = 0, p = 0;
         if (s_snap_cb(&t, &h, &p) == 0) {
-            publish_snapshot(TOPIC_STAT_JSON, t, h, p);
+            publish_snapshot(t, h, p);
         }
     }
     MQTTClient_freeMessage(&message);
@@ -133,13 +135,6 @@ int sensors_mqtt_connect(void)
     }
 
     s_connected = true;
-    return 0;
-}
-
-int sensors_mqtt_publish_telemetry(float t, float h, float p)
-{
-    if (!s_connected) return -1;
-    publish_snapshot(TOPIC_TELE_JSON, t, h, p);
     return 0;
 }
 

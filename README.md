@@ -30,6 +30,8 @@ WiFi 账密在 `app_demo.c` 顶部 `#define WIFI_SSID` / `#define WIFI_PWD` 改�
 
 ## MQTT 话题（请求-响应模式）
 
+> **完整接入文档：[`MQTT_API.md`](MQTT_API.md)**（含 Python / Node.js / Home Assistant 示例和故障排查）
+
 板子**不会主动定时上报**——只有当 broker 上有人发 `cmnd/ws63_sensor/get` 时，才推送一次。所有 publish 都是 **非 retained**，单纯订阅 `stat/...` 不会自动收到旧值，必须先 `cmnd/get` 一下。
 
 ### 触发上报（外部→板子）

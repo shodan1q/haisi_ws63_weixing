@@ -26,6 +26,13 @@
 #include "sensors/sht30.h"
 #include "sensors/bmp280.h"
 #include "sensors/tm1640.h"
+#include "net/wifi_connect.h"
+#include "net/sensors_mqtt.h"
+
+/* ---- WiFi credentials — edit if your AP changes. ---- */
+#define WIFI_SSID  "NBeeNET"
+#define WIFI_PWD   "nbeenet88888888"
+#define MQTT_PUBLISH_PERIOD_MS  5000
 
 /* ---- wiring ---- */
 #define SENSOR_BUS_SDA    7
@@ -52,6 +59,55 @@ volatile uint32_t g_sht30_ok   = 0;
 volatile uint32_t g_sht30_err  = 0;
 volatile uint32_t g_bmp_ok     = 0;
 volatile uint32_t g_bmp_err    = 0;
+volatile int      g_wifi_ok    = 0;
+volatile int      g_mqtt_ok    = 0;
+
+/* Called by MQTT when cmnd/.../get arrives — give the wrapper a fresh
+ * snapshot of all three readings. */
+static int snapshot_cb(float *t, float *h, float *p)
+{
+    *t = g_temp_c;
+    *h = g_humid_p;
+    *p = g_press_hpa;
+    return 0;
+}
+
+static void *net_task(const char *arg)
+{
+    unused(arg);
+    /* Give the sensor task a head start so the first MQTT publish has real
+     * data, not zeros. */
+    osal_msleep(2000);
+
+    osal_printk("[net] connecting WiFi SSID=%s ...\r\n", WIFI_SSID);
+    if (wifi_connect(WIFI_SSID, WIFI_PWD) != 0) {
+        osal_printk("[net] wifi_connect failed\r\n");
+        return NULL;
+    }
+    g_wifi_ok = 1;
+    osal_printk("[net] WiFi connected\r\n");
+
+    sensors_mqtt_set_snapshot_cb(snapshot_cb);
+    while (sensors_mqtt_connect() != 0) {
+        osal_printk("[net] mqtt retry in 3 s...\r\n");
+        osal_msleep(3000);
+    }
+    g_mqtt_ok = 1;
+
+    /* Periodic telemetry. */
+    for (;;) {
+        if (sensors_mqtt_is_connected()) {
+            g_mqtt_ok = 1;
+            sensors_mqtt_publish_telemetry(g_temp_c, g_humid_p, g_press_hpa);
+        } else {
+            g_mqtt_ok = 0;
+            osal_printk("[net] mqtt dropped, reconnecting...\r\n");
+            sensors_mqtt_connect();
+        }
+        osal_msleep(MQTT_PUBLISH_PERIOD_MS);
+    }
+    return NULL;
+}
 
 static void *sensor_task(const char *arg)
 {
@@ -181,7 +237,7 @@ static void *lcd_task(const char *arg)
     spi_lcd_display_string_line(0, 0, GREEN, BLACK, (uint8_t *)hdr);
     spi_lcd_display_string_line(0, 1, WHITE, BLACK, (uint8_t *)pins);
 
-    char tline[40], hline[40], pline[40], stat[40];
+    char tline[40], hline[40], pline[40], stat[40], net[40];
     for (;;) {
         snprintf(tline, sizeof(tline), "Temp:    %2d.%d C   ",
                  (int)g_temp_c, (int)((g_temp_c - (int)g_temp_c) * 10));
@@ -192,10 +248,15 @@ static void *lcd_task(const char *arg)
         snprintf(stat, sizeof(stat), "ok S:%lu B:%lu err:%lu/%lu",
                  (unsigned long)g_sht30_ok, (unsigned long)g_bmp_ok,
                  (unsigned long)g_sht30_err, (unsigned long)g_bmp_err);
+        snprintf(net, sizeof(net), "WiFi:%s MQTT:%s   ",
+                 g_wifi_ok ? "OK " : ".. ",
+                 g_mqtt_ok ? "OK" : "..");
         spi_lcd_display_string_line(0, 3, GREEN, BLACK, (uint8_t *)tline);
         spi_lcd_display_string_line(0, 4, GREEN, BLACK, (uint8_t *)hline);
         spi_lcd_display_string_line(0, 5, WHITE, BLACK, (uint8_t *)pline);
         spi_lcd_display_string_line(0, 7, WHITE, BLACK, (uint8_t *)stat);
+        spi_lcd_display_string_line(0, 8, g_mqtt_ok ? GREEN : WHITE,
+                                    BLACK, (uint8_t *)net);
         osal_msleep(200);
     }
     return NULL;
@@ -215,6 +276,10 @@ static void app_entry(void)
     h = osal_kthread_create((osal_kthread_handler)sensor_task, NULL,
                             "SensorTask", SENSOR_TASK_STACK);
     if (h) osal_kthread_set_priority(h, SENSOR_TASK_PRIO);
+
+    h = osal_kthread_create((osal_kthread_handler)net_task, NULL,
+                            "NetTask", 0x2000);
+    if (h) osal_kthread_set_priority(h, 24);
     osal_kthread_unlock();
 }
 
